@@ -1,0 +1,71 @@
+[project]
+name = "setplot"
+version = "0.1.0"
+description = "DJ-set analytics: BPM / key / track-fingerprint analysis with a streaming browser viewer."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Robert O'Brien" }]
+license = { text = "TBD" }
+dependencies = [
+    "librosa>=0.10,<0.12",
+    "numpy>=1.26,<3",
+    "matplotlib>=3.8,<4",
+    "requests>=2.31,<3",
+    "pyacrcloud>=1.0.11,<2",
+    "typer>=0.12,<1",
+    "fastapi>=0.110,<1",
+    "uvicorn[standard]>=0.30,<1",
+    "pydantic-settings>=2.2,<3",
+]
+
+[project.optional-dependencies]
+essentia = ["essentia>=2.1b6.dev1110"]
+
+[project.scripts]
+setplot = "setplot.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.11.8,<0.12"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<9",
+    "ruff>=0.5,<1",
+    "mypy>=1.10,<2",
+    "pre-commit>=3.7,<5",
+    "types-requests>=2,<3",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+# Long-form data tables (genre bands etc.) read better than wrapped ones.
+# RUF003: typographic chars in comments (×, ÷, en/em-dash) are intentional.
+ignore = ["E501", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+# typer's idiom is `arg: T = typer.Option(...)` in function signatures.
+"src/setplot/cli.py" = ["B008"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+# The ported analyzer modules use untyped numeric science code; tighten later.
+strict = false
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+[[tool.mypy.overrides]]
+module = ["setplot.pipeline.*", "setplot.plotting"]
+disable_error_code = ["no-untyped-def", "var-annotated"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
