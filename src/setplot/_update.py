@@ -19,7 +19,7 @@ from typing import Any
 
 # Author-configured upstream. Bake-time constant — release-pipeline aware
 # overrides (env var below) keep this honest for forks.
-UPSTREAM_GITHUB_REPO = "robobrien/setplot"
+UPSTREAM_GITHUB_REPO = "robrien20/setplot"
 CHECK_INTERVAL_HOURS = 24
 HTTP_TIMEOUT_S = 2.5
 
