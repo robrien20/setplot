@@ -10,11 +10,18 @@ Approach:
 from __future__ import annotations
 
 import csv
+import warnings
 from pathlib import Path
 
 import librosa
 import matplotlib.pyplot as plt
 import numpy as np
+
+# librosa 0.10's audioread fallback path emits noisy FutureWarning + UserWarning
+# every chunk for inputs libsndfile can't read natively (mp4/m4a — what yt-dlp
+# delivers). The fallback works correctly, just chatters. Filter narrowly.
+warnings.filterwarnings("ignore", category=FutureWarning, module=r"librosa\..*")
+warnings.filterwarnings("ignore", category=UserWarning, module=r"librosa\..*")
 
 # Genre zones commonly used in DJ culture for reference bands on the plot.
 GENRE_BANDS = [

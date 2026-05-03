@@ -16,9 +16,15 @@ import colorsys
 import csv
 import subprocess
 import tempfile
+import warnings
 from pathlib import Path
 
 import numpy as np
+
+# Same audioread/libsndfile noise as bpm.py — librosa falls back chattily for
+# mp4/m4a sources. Filter at module load.
+warnings.filterwarnings("ignore", category=FutureWarning, module=r"librosa\..*")
+warnings.filterwarnings("ignore", category=UserWarning, module=r"librosa\..*")
 
 try:
     import essentia.standard as es
