@@ -33,7 +33,9 @@ def test_check_yt_dlp_imports():
     assert "library importable" in r.detail
 
 
-def test_check_acr_creds_all_unset(monkeypatch):
+def test_check_acr_creds_all_unset(tmp_path, monkeypatch):
+    # Run from a tmp dir so pydantic-settings can't find the project's real .env.
+    monkeypatch.chdir(tmp_path)
     for k in ("ACR_HOST", "ACR_ACCESS_KEY", "ACR_ACCESS_SECRET"):
         monkeypatch.delenv(k, raising=False)
     r = diagnostics.check_acr_creds()
@@ -41,7 +43,8 @@ def test_check_acr_creds_all_unset(monkeypatch):
     assert "ACR_HOST" in r.detail
 
 
-def test_check_acr_creds_all_set(monkeypatch):
+def test_check_acr_creds_all_set(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("ACR_HOST", "x")
     monkeypatch.setenv("ACR_ACCESS_KEY", "y")
     monkeypatch.setenv("ACR_ACCESS_SECRET", "z")

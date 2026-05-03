@@ -13,7 +13,6 @@ doesn't tank the BPM and key data the user does have.
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -148,12 +147,14 @@ def _run_fingerprint(set_id: str, root: Path | None, stride: float, rec_length: 
     if src is None:
         raise FileNotFoundError(f"no source media in set {set_id}")
 
-    host = os.environ.get("ACR_HOST")
-    key = os.environ.get("ACR_ACCESS_KEY")
-    secret = os.environ.get("ACR_ACCESS_SECRET")
+    from setplot.config import get_settings
+
+    settings = get_settings()
+    host, key, secret = settings.acr_host, settings.acr_access_key, settings.acr_access_secret
     if not (host and key and secret):
         raise RuntimeError(
-            "ACR creds missing — set ACR_HOST / ACR_ACCESS_KEY / ACR_ACCESS_SECRET to enable fingerprinting."
+            "ACR creds missing — set ACR_HOST / ACR_ACCESS_KEY / ACR_ACCESS_SECRET "
+            "in your shell or a project .env to enable fingerprinting."
         )
 
     from acrcloud.recognizer import ACRCloudRecognizer

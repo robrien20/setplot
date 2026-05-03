@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
@@ -75,16 +74,27 @@ def check_yt_dlp() -> CheckResult:
 
 
 def check_acr_creds() -> CheckResult:
-    keys = ("ACR_HOST", "ACR_ACCESS_KEY", "ACR_ACCESS_SECRET")
-    missing = [k for k in keys if not os.environ.get(k)]
+    """Resolve via pydantic-settings so a project ``.env`` counts the same as
+    real env vars."""
+    from setplot.config import get_settings
+
+    s = get_settings()
+    pairs = (
+        ("ACR_HOST", s.acr_host),
+        ("ACR_ACCESS_KEY", s.acr_access_key),
+        ("ACR_ACCESS_SECRET", s.acr_access_secret),
+    )
+    missing = [name for name, val in pairs if not val]
     if not missing:
         return CheckResult(
-            name="acr creds", ok=True, detail="ACR_HOST, ACR_ACCESS_KEY, ACR_ACCESS_SECRET all set"
+            name="acr creds",
+            ok=True,
+            detail="ACR_HOST, ACR_ACCESS_KEY, ACR_ACCESS_SECRET all set",
         )
     return CheckResult(
         name="acr creds",
         ok=False,
-        detail=f"missing env vars: {', '.join(missing)}",
+        detail=f"missing: {', '.join(missing)}",
         hint="add to your shell init or a project .env. Get them at https://console.acrcloud.com",
     )
 

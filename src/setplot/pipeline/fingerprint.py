@@ -9,7 +9,6 @@ Optionally also queries AudD.io (--audd / use_audd=True) for a second opinion.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import time
@@ -635,12 +634,14 @@ def run(
     if not file.exists():
         raise FileNotFoundError(file)
 
-    host = os.environ.get("ACR_HOST")
-    key = os.environ.get("ACR_ACCESS_KEY")
-    secret = os.environ.get("ACR_ACCESS_SECRET")
+    from setplot.config import get_settings
+
+    settings = get_settings()
+    host, key, secret = settings.acr_host, settings.acr_access_key, settings.acr_access_secret
     if not (host and key and secret):
         raise RuntimeError(
-            "Set ACR_HOST, ACR_ACCESS_KEY, ACR_ACCESS_SECRET environment variables. "
+            "ACR creds missing — set ACR_HOST / ACR_ACCESS_KEY / ACR_ACCESS_SECRET "
+            "in your shell or a project .env. "
             "Get them at https://console.acrcloud.com -> your Audio/Video Recognition project."
         )
 
@@ -652,7 +653,7 @@ def run(
         f"Stride={stride}s  rec_length={rec_length}s  range={fmt_ts(start)}..{fmt_ts(min(duration, end))}\n"
     )
 
-    audd_token = os.environ.get("AUDD_TOKEN") if use_audd else None
+    audd_token = settings.audd_token if use_audd else None
     if use_audd and not audd_token:
         raise RuntimeError("--audd requires AUDD_TOKEN env var.")
 
