@@ -79,6 +79,55 @@ def test_dedupe_and_merge_collapses_consecutive_same_track():
     assert track_b["hit_count"] == 1
 
 
+class _FakeRecognizer:
+    """Returns a fixed JSON response from ``recognize_by_file`` regardless of input."""
+
+    def __init__(self, response: dict):
+        self._response = response
+
+    def recognize_by_file(self, *_args, **_kwargs):
+        import json as _json
+
+        return _json.dumps(self._response)
+
+
+def test_scan_file_raises_on_fatal_status_code(tmp_path):
+    """3001 / 3002 / 3003 / 3014 should abort the scan immediately rather than
+    grinding through every remaining window with the same broken creds."""
+    import pytest
+
+    fake_audio = tmp_path / "x.mp3"
+    fake_audio.write_bytes(b"\x00")
+    rec = _FakeRecognizer({"status": {"code": 3001, "msg": "Missing/Invalid Access Key"}})
+    with pytest.raises(fp.FingerprintAuthError) as ei:
+        fp.scan_file(
+            rec,
+            fake_audio,
+            duration_s=300.0,
+            stride_s=30.0,
+            rec_length=10,
+            start_s=0.0,
+            end_s=float("inf"),
+            host_for_logs="identify-eu-west-1.acrcloud.com",
+        )
+    msg = str(ei.value)
+    assert "3001" in msg
+    assert "ACR_HOST" in msg
+    assert "identify-eu-west-1.acrcloud.com" in msg
+
+
+def test_scan_file_keeps_going_on_recoverable_status(tmp_path):
+    """Status codes outside the fatal set (e.g. 1001 'no result') don't raise —
+    they're just logged and the next window is attempted."""
+    fake_audio = tmp_path / "x.mp3"
+    fake_audio.write_bytes(b"\x00")
+    rec = _FakeRecognizer({"status": {"code": 1001, "msg": "No result"}, "metadata": {}})
+    hits, _obs = fp.scan_file(
+        rec, fake_audio, duration_s=20.0, stride_s=10.0, rec_length=10, start_s=0.0, end_s=float("inf")
+    )
+    assert hits == []  # no matches, but no exception either
+
+
 def test_dedupe_min_score_drops_weak_hits():
     h1 = fp.parse_music_row(_row(score=20), window_start_s=0.0, window_len_s=10.0)
     h2 = fp.parse_music_row(_row(score=85), window_start_s=10.0, window_len_s=10.0)

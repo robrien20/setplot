@@ -39,6 +39,23 @@ from acrcloud.recognizer import ACRCloudRecognizer
 # --------------------------------------------------------------------------------------------------
 
 
+# ACR status codes that mean "no point continuing" — auth / project-config /
+# quota issues that won't recover by retrying or moving to the next window.
+# 3001 Missing/Invalid Access Key, 3002 Invalid Project Type,
+# 3003 Limit exceeded, 3014 Invalid signature.
+# (3015 "could not generate fingerprint" is per-window and recoverable; not in here.)
+_FATAL_ACR_STATUS_CODES = frozenset({3001, 3002, 3003, 3014})
+
+
+class FingerprintAuthError(RuntimeError):
+    """Raised when ACR returns a non-recoverable auth/quota status code.
+
+    Surfaces the underlying ACR status code so callers can show a helpful
+    message ("check ACR_HOST", "you've hit the daily limit", etc.) without
+    having to grep through scan_file logs.
+    """
+
+
 @dataclass
 class Hit:
     """One recognized music row from one recognize_by_file call."""
@@ -293,6 +310,7 @@ def scan_file(
     start_s: float,
     end_s: float,
     audd_token: str | None = None,
+    host_for_logs: str = "?",
 ) -> tuple[list[Hit], dict]:
     hits: list[Hit] = []
     observed_keys: dict[str, set] = {
@@ -365,6 +383,16 @@ def scan_file(
                 )
         elif code == 1001:
             print(f"  [{idx}/{total_windows}] t={fmt_ts(t)} acr: no match")
+        elif code in _FATAL_ACR_STATUS_CODES:
+            # Auth / quota / project-config errors aren't going to recover by
+            # continuing to grind through the rest of the file — every window
+            # would burn another wasted call. Abort loudly.
+            msg = (resp.get("status") or {}).get("msg", "?")
+            raise FingerprintAuthError(
+                f"ACR returned status {code} {msg!r} on window {idx}/{total_windows}. "
+                f"Check ACR_HOST / ACR_ACCESS_KEY / ACR_ACCESS_SECRET — these creds "
+                f"don't work against {host_for_logs!r}."
+            )
         else:
             msg = (resp.get("status") or {}).get("msg", "?")
             print(f"  [{idx}/{total_windows}] t={fmt_ts(t)} acr: status={code} {msg}", file=sys.stderr)
@@ -658,7 +686,15 @@ def run(
         raise RuntimeError("--audd requires AUDD_TOKEN env var.")
 
     hits, observed = scan_file(
-        recognizer, file, duration, stride, rec_length, start, end, audd_token=audd_token
+        recognizer,
+        file,
+        duration,
+        stride,
+        rec_length,
+        start,
+        end,
+        audd_token=audd_token,
+        host_for_logs=host,
     )
     merged = dedupe_and_merge(hits)
     write_outputs(merged, hits, file, suffix=suffix)

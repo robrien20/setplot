@@ -162,7 +162,15 @@ def _run_fingerprint(set_id: str, root: Path | None, stride: float, rec_length: 
     recognizer = ACRCloudRecognizer({"host": host, "access_key": key, "access_secret": secret, "timeout": 15})
     duration = fp_mod.probe_duration(src)
     hits, _observed = fp_mod.scan_file(
-        recognizer, src, duration, stride, rec_length, 0.0, float("inf"), audd_token=None
+        recognizer,
+        src,
+        duration,
+        stride,
+        rec_length,
+        0.0,
+        float("inf"),
+        audd_token=None,
+        host_for_logs=host,
     )
     merged = fp_mod.dedupe_and_merge(hits)
 
