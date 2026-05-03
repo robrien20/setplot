@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Yuma Day 1 — mix explorer</title>
+<title>SetPlot</title>
 <style>
   :root {
     --bg: #0e1420;
@@ -22,7 +22,20 @@
   html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg);
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
     font-size: 13px; overflow: hidden; }
-  #app { display: grid; grid-template-rows: auto auto auto auto auto 1fr; height: 100vh; gap: 6px; padding: 8px; }
+  #app { display: grid; grid-template-rows: auto auto auto auto auto auto 1fr; height: 100vh; gap: 6px; padding: 8px; }
+
+  /* Header strip — back link + set title + status pill */
+  #header { display: flex; align-items: center; gap: 12px; padding: 6px 10px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 6px; }
+  #back-link { color: var(--accent); text-decoration: none; font-size: 12px; }
+  #back-link:hover { text-decoration: underline; }
+  #header-title { font-weight: 600; font-size: 13px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #header-meta { color: var(--fg-dim); font-size: 11px; font-family: monospace; }
+  #status-pill { font-size: 10px; padding: 3px 8px; border-radius: 10px; border: 1px solid var(--border);
+    color: var(--fg-dim); background: var(--panel-2); font-family: monospace; }
+  #status-pill.live { color: var(--accent-2); border-color: var(--accent-2); animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.4 } }
+  #status-pill.idle { color: var(--strong); border-color: var(--strong); }
 
   .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; position: relative; }
   .panel-title { font-size: 11px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: 0.06em;
@@ -51,13 +64,13 @@
   #key-now { font-family: "SF Mono", monospace; padding: 4px 10px; border-radius: 4px;
     font-size: 13px; min-width: 70px; text-align: center; color: #0e1420; font-weight: 600; }
 
-  /* Custom scrub bar — physically aligned with BPM via shared .time-aligned padding */
-  #scrub-canvas { width: 100%; height: 22px; display: block; cursor: pointer; background: var(--panel-2);
-    border-radius: 3px; }
+  /* Wavesurfer container — replaces the Phase 1 #scrub-canvas */
+  #waveform { width: 100%; min-height: 64px; cursor: pointer; }
+  #waveform-empty { color: var(--fg-dim); font-size: 11px; padding: 18px 0; text-align: center; }
 
   /* Transport row */
   #transport { display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: var(--panel);
-    border: 1px solid var(--border); border-radius: 6px; }
+    border: 1px solid var(--border); border-radius: 6px; flex-wrap: wrap; }
   .btn { background: var(--panel-2); border: 1px solid var(--border); color: var(--fg); padding: 4px 12px;
     border-radius: 4px; cursor: pointer; font-size: 14px; font-family: monospace; min-width: 38px; }
   .btn:hover { background: var(--border); }
@@ -128,6 +141,13 @@
 </head>
 <body>
 <div id="app">
+  <div id="header">
+    <a id="back-link" href="/">← library</a>
+    <div id="header-title">loading…</div>
+    <div id="header-meta"></div>
+    <div id="status-pill">—</div>
+  </div>
+
   <div class="panel">
     <div class="panel-title">
       Minimap — whole set  <span class="hint">click / drag to move view window · drag edges to resize</span>
@@ -174,9 +194,13 @@
   </div>
 
   <div class="panel">
-    <div class="panel-title">Audio scrub — same time axis as BPM above</div>
+    <div class="panel-title">
+      Audio waveform — same time axis as BPM
+      <span class="hint">click to seek · scroll to playback (wavesurfer)</span>
+    </div>
     <div class="time-aligned">
-      <canvas id="scrub-canvas"></canvas>
+      <div id="waveform"></div>
+      <div id="waveform-empty">peaks not generated yet — install <code>audiowaveform</code> and re-import</div>
     </div>
   </div>
 
@@ -207,7 +231,7 @@
     <button class="btn" id="btn-zoom-reset" title="reset zoom">1:1</button>
     <button class="btn" id="btn-zoom-in" title="zoom in 2×">+</button>
     <button class="btn" id="btn-follow" title="follow playhead (F)">⤓ follow</button>
-    <div id="zoom-indicator">view: 00:00 → 07:15</div>
+    <div id="zoom-indicator">view: 00:00 → ?</div>
   </div>
 
   <div id="main">
@@ -231,9 +255,9 @@
   </div>
 </div>
 
-<!-- Native audio element hidden; we drive it via custom transport + canvas -->
-<audio id="audio" preload="metadata" src="yuma_day1.m4a" style="display:none"></audio>
+<!-- Native audio element drives playback; wavesurfer attaches via media: audio. -->
+<audio id="audio" preload="metadata" style="display:none"></audio>
 
-<script src="static/viewer.js"></script>
+<script type="module" src="static/viewer.js"></script>
 </body>
 </html>

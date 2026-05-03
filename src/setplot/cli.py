@@ -176,29 +176,29 @@ def rm_(set_id: str = typer.Argument(...)) -> None:
 @app.command()
 def serve(
     port: int = typer.Option(8765, help="Port to bind."),
+    host: str = typer.Option("127.0.0.1", help="Host to bind."),
+    no_browser: bool = typer.Option(False, "--no-browser", help="Don't open the browser on startup."),
 ) -> None:
-    """Serve the viewer via Python's stdlib HTTP server (Phase 1 placeholder).
+    """Launch the FastAPI app + open the library in a browser."""
+    import threading
+    import time
+    import webbrowser
 
-    Phase 3 replaces this with a FastAPI app that provides per-set routing,
-    SSE-streaming analysis, and HTTP Range audio playback.
-    """
-    import http.server
-    import socketserver
+    import uvicorn
 
-    import setplot
+    from setplot.server.app import create_app
 
-    viewer_path = str(Path(setplot.__file__).parent / "viewer")
+    url = f"http://{host}:{port}/"
 
-    class Handler(http.server.SimpleHTTPRequestHandler):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, directory=viewer_path, **kwargs)
+    def _open_browser_after_bind() -> None:
+        # Defer the browser open by a hair so uvicorn has a chance to bind first.
+        time.sleep(0.6)
+        webbrowser.open(url)
 
-    typer.echo(f"Serving {viewer_path} on http://localhost:{port}/viewer.html (Ctrl-C to stop)")
-    with socketserver.TCPServer(("", port), Handler) as httpd:
-        try:
-            httpd.serve_forever()
-        except KeyboardInterrupt:
-            typer.echo("\nstopping.")
+    if not no_browser:
+        threading.Thread(target=_open_browser_after_bind, daemon=True).start()
+    typer.echo(f"SetPlot serving on {url} (Ctrl-C to stop)")
+    uvicorn.run(create_app(), host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":

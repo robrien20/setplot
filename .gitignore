@@ -38,3 +38,7 @@ dist/
 .idea/
 .vscode/
 *.swp
+
+# Playwright + ad-hoc local smoke artefacts
+.playwright-mcp/
+phase*-*.png
