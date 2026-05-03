@@ -23,7 +23,12 @@ app = typer.Typer(
 
 def _version_cb(value: bool) -> None:
     if value:
+        from setplot import _update
+
         typer.echo(f"setplot {__version__}")
+        hint = _update.check(__version__)
+        if hint:
+            typer.echo(hint)
         raise typer.Exit()
 
 
@@ -171,6 +176,26 @@ def rm_(set_id: str = typer.Argument(...)) -> None:
     else:
         typer.echo(f"not found: {set_id}", err=True)
         raise typer.Exit(code=1)
+
+
+@app.command()
+def doctor() -> None:
+    """Check system dependencies + ACR creds; print remediation hints."""
+    from setplot import diagnostics
+
+    rows = diagnostics.run_checks()
+    failed = 0
+    for r in rows:
+        marker = "✓" if r.ok else "✗"
+        typer.echo(f"  {marker} {r.name:18s} {r.detail}")
+        if not r.ok:
+            failed += 1
+            if r.hint:
+                typer.echo(f"      hint: {r.hint}")
+    if failed:
+        typer.echo(f"\n{failed} check{'s' if failed != 1 else ''} failed.")
+        raise typer.Exit(code=1)
+    typer.echo("\nAll checks passed.")
 
 
 @app.command()

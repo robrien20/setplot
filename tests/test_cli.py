@@ -8,10 +8,25 @@ from setplot import __version__
 from setplot.cli import app
 
 
-def test_cli_version_flag():
+def test_cli_version_flag(monkeypatch):
+    monkeypatch.setenv("SETPLOT_NO_UPDATE_CHECK", "1")  # keep --version offline + fast
     result = CliRunner().invoke(app, ["--version"])
     assert result.exit_code == 0
     assert __version__ in result.output
+
+
+def test_cli_version_includes_upgrade_hint(tmp_path, monkeypatch):
+    """When the update checker reports a newer release, --version surfaces it."""
+    from setplot import _update
+
+    monkeypatch.setenv("SETPLOT_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("SETPLOT_NO_UPDATE_CHECK", raising=False)
+    monkeypatch.setattr(_update, "_fetch_latest_version", lambda repo: "9.9.9")
+    result = CliRunner().invoke(app, ["--version"])
+    assert result.exit_code == 0
+    assert __version__ in result.output
+    assert "9.9.9" in result.output
+    assert "uv tool upgrade setplot" in result.output
 
 
 def test_cli_help_lists_all_commands():

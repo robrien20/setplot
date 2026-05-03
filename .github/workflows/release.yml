@@ -1,0 +1,122 @@
+name: Release
+
+# Triggered by pushing a `v*` tag (e.g. `git tag v0.2.0 && git push --tags`).
+# Builds the wheel + sdist with uv, publishes to PyPI via Trusted Publisher
+# (OIDC — no API token), and creates a GitHub Release with auto-generated notes.
+#
+# One-time setup before the first run:
+# 1. Create the project on PyPI at https://pypi.org/manage/account/publishing/
+#    - Add a Trusted Publisher: this repo, workflow file `release.yml`,
+#      environment name `pypi` (matches the `environment:` block below).
+# 2. In this repo's GitHub settings → Environments, create an environment named
+#    `pypi` (no secrets required — OIDC handles auth).
+# 3. Make sure the version in src/setplot/__init__.py matches the tag minus the `v`.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.2.0)"
+        required: true
+
+permissions:
+  contents: write   # gh release create
+  id-token: write   # PyPI Trusted Publisher OIDC
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so gh release autonotes can diff vs prior tag
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.8"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Verify tag matches package version
+        id: version
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          if [ -z "$tag" ] || [ "$tag" = "$GITHUB_REF" ]; then
+            tag="${{ inputs.tag }}"
+          fi
+          version_in_tag="${tag#v}"
+          version_in_src="$(uv run python -c 'import setplot; print(setplot.__version__)')"
+          echo "tag=$tag, src=$version_in_src"
+          if [ "$version_in_tag" != "$version_in_src" ]; then
+            echo "::error::tag $tag does not match src/setplot/__init__.py version $version_in_src"
+            exit 1
+          fi
+          echo "version=$version_in_src" >> "$GITHUB_OUTPUT"
+
+      - name: Build wheel + sdist
+        run: uv build
+
+      - name: Verify wheel installs + CLI works
+        run: |
+          uv venv /tmp/probe
+          uv pip install --python /tmp/probe/bin/python dist/setplot-*.whl
+          /tmp/probe/bin/setplot --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/setplot/${{ needs.build.outputs.version }}/
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          # Trusted Publisher: no token, no skip-existing — fail loudly on collision.
+
+  github-release:
+    needs: [build, pypi]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          if [ -z "$tag" ] || [ "$tag" = "$GITHUB_REF" ]; then
+            tag="${{ inputs.tag }}"
+          fi
+          gh release create "$tag" \
+            dist/setplot-*.whl \
+            dist/setplot-*.tar.gz \
+            --title "$tag" \
+            --generate-notes \
+            --verify-tag
