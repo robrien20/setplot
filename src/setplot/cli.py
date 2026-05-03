@@ -114,6 +114,65 @@ def plot(
         plotting.plot_hour_zoom(bpm_csv, acr_json, zoom_dir, stride=stride, hour_span=zoom_hours)
 
 
+@app.command(name="import")
+def import_(
+    target: str = typer.Argument(..., help="YouTube/yt-dlp URL or path to a local media file."),
+    no_analyze: bool = typer.Option(False, "--no-analyze", help="Just ingest; don't run analysis steps."),
+    skip_fingerprint: bool = typer.Option(
+        False, "--skip-fingerprint", help="Skip ACR fingerprinting (e.g. when creds aren't set)."
+    ),
+    skip_peaks: bool = typer.Option(
+        False, "--skip-peaks", help="Skip waveform peaks (e.g. audiowaveform not installed)."
+    ),
+    key_engine: str = typer.Option("essentia", help="Key engine: 'essentia' or 'librosa'."),
+) -> None:
+    """Ingest <target> into the SetPlot data dir and run analysis."""
+    from setplot.pipeline import ingest as ingest_mod
+    from setplot.pipeline import orchestrator
+
+    sid = ingest_mod.ingest(target)
+    typer.echo(f"ingested → {sid}")
+    if no_analyze:
+        return
+    skip: tuple[str, ...] = tuple(
+        s for s, on in (("fingerprint", skip_fingerprint), ("peaks", skip_peaks)) if on
+    )
+    steps = orchestrator.analyze(sid, key_engine=key_engine, skip=skip)
+    for step, state in steps.items():
+        typer.echo(f"  {step:12s} {state}")
+
+
+@app.command(name="list")
+def list_() -> None:
+    """List sets in the SetPlot data dir."""
+    from setplot import store
+
+    rows = store.list_sets()
+    if not rows:
+        typer.echo("(no sets — try `setplot import <url-or-path>`)")
+        return
+    for r in rows:
+        meta = r["metadata"]
+        steps = r["status"]["steps"]
+        completed = sum(1 for v in steps.values() if v == "done")
+        title = meta.get("title", "?")
+        dur = meta.get("duration_s")
+        dur_s = f"{int(dur // 60):>3}m" if dur else "  ? "
+        typer.echo(f"{r['set_id']:48s}  {dur_s}  {completed}/{len(steps)} done  {title}")
+
+
+@app.command(name="rm")
+def rm_(set_id: str = typer.Argument(...)) -> None:
+    """Delete a set from the data dir."""
+    from setplot import store
+
+    if store.delete_set(set_id):
+        typer.echo(f"removed {set_id}")
+    else:
+        typer.echo(f"not found: {set_id}", err=True)
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def serve(
     port: int = typer.Option(8765, help="Port to bind."),
