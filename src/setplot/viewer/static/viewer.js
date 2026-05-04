@@ -36,6 +36,7 @@ let dragMode = null;
 let minimapDragAnchor = null;
 let followPlayhead = true;
 let wavesurfer = null;
+let SERVICES = { spotify: { enabled: false }, apple: { enabled: false } };
 
 const audio         = document.getElementById("audio");
 const minimapCv     = document.getElementById("minimap-canvas");
@@ -654,7 +655,11 @@ function renderNow() {
     const trackPos = c.duration_ms ? `${String(poMm).padStart(2,"0")}:${String(poSs).padStart(2,"0")} / ${String(durMm).padStart(2,"0")}:${String(durSs).padStart(2,"0")}` : "";
     const engine = {1:"fingerprint",2:"humming/cover",3:"fp+reranked"}[c.result_from] || "";
     const links = [];
+    const previews = [];
+    if (c.apple) previews.push(`<button class="preview-btn" data-preview-service="apple" data-preview-id="${c.apple}" title="play 30s preview from Apple Music">▶ AM</button>`);
+    if (c.spotify) previews.push(`<button class="preview-btn" data-preview-service="spotify" data-preview-id="${c.spotify}" title="play 30s preview via Spotify embed">▶ SP</button>`);
     if (c.spotify) links.push(`<a href="https://open.spotify.com/track/${c.spotify}" target="_blank">Spotify</a>`);
+    if (c.apple) links.push(`<a href="https://music.apple.com/song/${c.apple}" target="_blank">Apple Music</a>`);
     if (c.deezer) links.push(`<a href="https://www.deezer.com/track/${c.deezer}" target="_blank">Deezer</a>`);
     if (c.youtube) links.push(`<a href="https://youtu.be/${c.youtube}" target="_blank">YouTube</a>`);
     if (c.isrc) links.push(`<a href="https://musicbrainz.org/search?type=recording&query=isrc:${c.isrc}" target="_blank">MB</a>`);
@@ -662,13 +667,200 @@ function renderNow() {
       <div class="candidate-title">${esc(c.title)}</div>
       <div class="candidate-artist">${esc(c.artists)}</div>
       <div class="candidate-meta">score ${c.score}${engine?" · "+engine:""}${trackPos?" · track@"+trackPos:""}${c.album?" · "+esc(c.album):""}${c.label?" · "+esc(c.label):""}${c.isrc?" · ISRC "+c.isrc:""}</div>
+      ${previews.length ? `<div class="candidate-previews">${previews.join("")}</div>` : ""}
       ${links.length ? `<div class="candidate-links">${links.join("")}</div>` : ""}
     </div>`;
   }
   html += lookupLinksFor(t, bpm);
   nowContent.innerHTML = html;
+  wirePreviewButtons(nowContent);
 }
 function esc(s) { return (s||"").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"})[c]); }
+
+// ============================================================================
+// 30s previews (no auth) — Apple via iTunes lookup, Spotify via embed iframe.
+// One shared player; clicking another preview tears the previous one down.
+// ============================================================================
+let previewState = null;  // { service, id, button, audio?, iframe? }
+
+function teardownPreview() {
+  if (!previewState) return;
+  if (previewState.audio) { try { previewState.audio.pause(); previewState.audio.remove(); } catch (_) {} }
+  if (previewState.iframe) { try { previewState.iframe.remove(); } catch (_) {} }
+  if (previewState.button) {
+    const svc = previewState.service === "apple" ? "AM" : "SP";
+    previewState.button.textContent = `▶ ${svc}`;
+    previewState.button.classList.remove("playing");
+  }
+  previewState = null;
+}
+
+async function playPreview(service, id, button) {
+  if (previewState && previewState.id === id && previewState.service === service) {
+    teardownPreview();
+    return;
+  }
+  teardownPreview();
+  // Pause the main set audio so the preview is the only thing playing.
+  if (!audio.paused) audio.pause();
+
+  if (service === "apple") {
+    let info;
+    try {
+      const r = await fetch(`/api/preview?service=apple&id=${encodeURIComponent(id)}`);
+      if (!r.ok) throw new Error(`preview lookup ${r.status}`);
+      info = await r.json();
+    } catch (e) {
+      button.textContent = "✗ no preview";
+      setTimeout(() => { button.textContent = "▶ AM"; }, 1800);
+      return;
+    }
+    const a = new Audio(info.preview_url);
+    a.addEventListener("ended", teardownPreview);
+    button.textContent = "⏸ AM";
+    button.classList.add("playing");
+    previewState = { service, id, button, audio: a };
+    a.play().catch(() => teardownPreview());
+  } else if (service === "spotify") {
+    // Spotify's official embed plays a 30s preview without auth. We drop the
+    // iframe inline directly under the button row and let it autoplay.
+    const wrapper = button.closest(".candidate") || button.parentElement;
+    const iframe = document.createElement("iframe");
+    iframe.src = `https://open.spotify.com/embed/track/${encodeURIComponent(id)}?utm_source=setplot`;
+    iframe.width = "100%";
+    iframe.height = "80";
+    iframe.frameBorder = "0";
+    iframe.allow = "encrypted-media";
+    iframe.style.cssText = "margin-top:6px;border-radius:4px;";
+    wrapper.appendChild(iframe);
+    button.textContent = "✕ SP";
+    button.classList.add("playing");
+    previewState = { service, id, button, iframe };
+  }
+}
+
+function wirePreviewButtons(container) {
+  container.querySelectorAll(".preview-btn").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      playPreview(btn.dataset.previewService, btn.dataset.previewId, btn);
+    });
+  });
+}
+
+// Pause any preview when the main set audio starts playing — the user clearly
+// wants to hear the set, not a 30s clip.
+audio.addEventListener("play", teardownPreview);
+
+// ============================================================================
+// Export buttons (visible only for services configured server-side)
+// ============================================================================
+function renderExportButtons() {
+  // Slot a small bar under the header with "Export → Spotify / Apple Music".
+  // Hidden if neither service is configured.
+  let bar = document.getElementById("export-bar");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "export-bar";
+    bar.style.cssText = "padding:6px 10px;display:flex;gap:8px;align-items:center;";
+    const headerEl = document.getElementById("header");
+    headerEl.parentElement.insertBefore(bar, headerEl.nextSibling);
+  }
+  const buttons = [];
+  if (SERVICES.spotify && SERVICES.spotify.enabled) {
+    buttons.push(`<button class="btn" id="btn-export-spotify">Export → Spotify</button>`);
+  }
+  if (SERVICES.apple && SERVICES.apple.enabled) {
+    buttons.push(`<button class="btn" id="btn-export-apple">Export → Apple Music</button>`);
+  }
+  if (buttons.length === 0) {
+    bar.style.display = "none";
+    bar.innerHTML = "";
+    return;
+  }
+  bar.style.display = "flex";
+  bar.innerHTML = `<span style="color:var(--fg-dim);font-size:11px;">recognized tracks →</span>${buttons.join("")}<span id="export-status" style="color:var(--fg-dim);font-size:11px;"></span>`;
+  const sp = document.getElementById("btn-export-spotify");
+  if (sp) sp.addEventListener("click", () => exportSpotify());
+  const am = document.getElementById("btn-export-apple");
+  if (am) am.addEventListener("click", () => exportApple());
+}
+
+async function exportSpotify() {
+  const status = document.getElementById("export-status");
+  // Probe connection state — if not connected, kick off the OAuth dance.
+  let st;
+  try {
+    st = await fetch("/api/auth/status").then(r => r.json());
+  } catch (e) {
+    status.textContent = "auth probe failed";
+    return;
+  }
+  if (!st.spotify || !st.spotify.connected) {
+    status.textContent = "opening Spotify login…";
+    // Pop a window so we don't lose the set page; we'll re-poll status on focus.
+    const popup = window.open("/auth/spotify/login", "setplot_spotify_auth", "width=520,height=720");
+    const onFocus = async () => {
+      window.removeEventListener("focus", onFocus);
+      // Brief delay to let the callback finish writing tokens.
+      await new Promise(r => setTimeout(r, 600));
+      const s2 = await fetch("/api/auth/status").then(r => r.json()).catch(() => null);
+      if (s2 && s2.spotify && s2.spotify.connected) {
+        status.textContent = "connected. click Export again.";
+      } else {
+        status.textContent = "not connected — try again.";
+      }
+    };
+    window.addEventListener("focus", onFocus);
+    return;
+  }
+
+  status.textContent = "exporting → Spotify…";
+  try {
+    const r = await fetch("/api/export/spotify", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ set_id: SET_ID, public: false }),
+    });
+    if (!r.ok) {
+      const err = await r.text();
+      status.textContent = `export failed: ${r.status} ${err.slice(0, 120)}`;
+      return;
+    }
+    const body = await r.json();
+    const link = body.playlist_url
+      ? `<a href="${body.playlist_url}" target="_blank" style="color:var(--accent);">open playlist ↗</a>`
+      : "(no link)";
+    const um = body.unmatched && body.unmatched.length
+      ? ` · ${body.unmatched.length} unmatched`
+      : "";
+    status.innerHTML = `✓ ${body.matched} tracks · ${link}${um}`;
+  } catch (e) {
+    status.textContent = `export failed: ${e}`;
+  }
+}
+async function exportApple() {
+  const status = document.getElementById("export-status");
+  status.textContent = "loading MusicKit…";
+  let mod;
+  try {
+    mod = await import("./apple-export.js");
+  } catch (e) {
+    status.textContent = `couldn't load apple-export.js: ${e}`;
+    return;
+  }
+  try {
+    const r = await mod.exportToAppleMusic(SET_ID);
+    const link = r.playlist_url
+      ? `<a href="${r.playlist_url}" target="_blank" style="color:var(--accent);">open playlist ↗</a>`
+      : "(playlist created — check your library)";
+    const um = r.unmatched && r.unmatched.length ? ` · ${r.unmatched.length} unmatched` : "";
+    status.innerHTML = `✓ ${r.matched} tracks · ${link}${um}`;
+  } catch (e) {
+    status.textContent = `apple export failed: ${e.message || e}`;
+  }
+}
 
 // ============================================================================
 // Tracklist
@@ -689,6 +881,7 @@ function renderTracklist() {
     const inView = tk.start >= viewStart && tk.start <= viewEnd ? "in-view" : "";
     const links = [];
     if (tk.spotify) links.push(`<a href="https://open.spotify.com/track/${tk.spotify}" target="_blank" onclick="event.stopPropagation()">sp</a>`);
+    if (tk.apple) links.push(`<a href="https://music.apple.com/song/${tk.apple}" target="_blank" onclick="event.stopPropagation()">am</a>`);
     if (tk.youtube) links.push(`<a href="https://youtu.be/${tk.youtube}" target="_blank" onclick="event.stopPropagation()">yt</a>`);
     html += `<div class="track-row ${inView}" data-start="${tk.start}">
       <span class="track-time">${fmt(tk.start)}</span>
@@ -1053,10 +1246,12 @@ async function boot() {
   });
   DATA.title = meta.title || SET_ID;
   if (meta.duration_s) DATA.duration_s = meta.duration_s;
+  if (meta.services) SERVICES = meta.services;
   document.title = `${DATA.title} — SetPlot`;
   headerTitle.textContent = DATA.title;
   headerMeta.textContent = `${meta.uploader || ""}${meta.uploader ? " · " : ""}${meta.duration_s ? fmtShort(meta.duration_s) : ""}`;
   setStatusPill(meta);
+  renderExportButtons();
 
   const [bpmDoc, keyDoc, tracksDoc, peaksDoc] = await Promise.all([
     fetchJsonOr404(`${setUrl}/bpm.json`),

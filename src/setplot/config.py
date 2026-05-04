@@ -38,9 +38,30 @@ class Settings(BaseSettings):
     setplot_data_dir: Path | None = None
     port: int = 8765
 
+    # Streaming integrations (all optional). The viewer hides export buttons
+    # for services whose credentials aren't configured.
+    spotify_client_id: str | None = None
+    spotify_redirect_uri: str = "http://127.0.0.1:8765/auth/spotify/callback"
+
+    apple_music_team_id: str | None = None
+    apple_music_key_id: str | None = None
+    # Path to the .p8 private key file downloaded from the Apple Developer portal.
+    apple_music_key_path: Path | None = None
+
     def data_dir(self) -> Path:
         """Resolved data dir: explicit override or platform default."""
         return self.setplot_data_dir if self.setplot_data_dir else _platform_data_dir()
+
+    def spotify_enabled(self) -> bool:
+        return bool(self.spotify_client_id)
+
+    def apple_music_enabled(self) -> bool:
+        return bool(
+            self.apple_music_team_id
+            and self.apple_music_key_id
+            and self.apple_music_key_path
+            and self.apple_music_key_path.exists()
+        )
 
 
 def get_settings() -> Settings:
