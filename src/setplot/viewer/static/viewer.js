@@ -251,6 +251,11 @@ function drawMinimap() {
 // Visible-range autoscale, snapped to "nice" round numbers. Uses p2/p98
 // percentiles instead of strict min/max so a stray octave-error spike
 // (140 → 70 → 140) can't drag the axis low and squash the real data.
+//
+// Headroom rule: the modal BPM (median) sits no higher than 2/3 up the
+// canvas — i.e. always ≥ 1/3 from the top. So if a 142-BPM set has a
+// real 3-min dip to 95, the dip is visible at the bottom but the dense
+// 140-142 cluster keeps breathing room above instead of pinning the top.
 function bpmYRange(vs, ve) {
   const vals = [];
   for (const [t, b] of DATA.bpm) {
@@ -261,9 +266,13 @@ function bpmYRange(vs, ve) {
   vals.sort((a, b) => a - b);
   const lo = vals[Math.floor(vals.length * 0.02)];
   const hi = vals[Math.min(vals.length - 1, Math.floor(vals.length * 0.98))];
+  const mode = vals[vals.length >> 1];
   const pad = Math.max((hi - lo) * 0.15, 5);
   let yMin = Math.floor((lo - pad) / 5) * 5;
   let yMax = Math.ceil((hi + pad) / 5) * 5;
+  // y_mode ≥ h/3  ⇔  yMax ≥ mode + (mode - yMin) / 2.
+  const minYMaxForHeadroom = mode + (mode - yMin) / 2;
+  if (yMax < minYMaxForHeadroom) yMax = Math.ceil(minYMaxForHeadroom / 5) * 5;
   if (yMax - yMin < 15) yMax = yMin + 15;
   return [Math.max(40, yMin), Math.min(240, yMax)];
 }
