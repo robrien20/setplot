@@ -323,13 +323,24 @@ function drawBPM() {
     ctx.fillText(label, w + 4, (py(lo) + py(hi)) / 2 + 3);
   }
 
-  ctx.textAlign = "right";
-  ctx.fillStyle = "rgba(230,236,245,0.5)";
+  // BPM grid labels — drawn INSIDE the canvas at the left edge (the .time-aligned
+  // padding is just gutter, anything drawn at canvas x<0 gets clipped). Pinned
+  // labels with a small dark badge so they read clearly over genre bands.
   ctx.font = "10px monospace";
-  for (const b of [80, 100, 120, 130, 140, 160, 180, 200]) {
-    ctx.fillText(b, -4, py(b) + 3);
-    ctx.strokeStyle = "rgba(255,255,255,0.04)";
-    ctx.beginPath(); ctx.moveTo(0, py(b)); ctx.lineTo(w, py(b)); ctx.stroke();
+  ctx.textAlign = "left";
+  for (const b of [90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190]) {
+    const yy = py(b);
+    // Full-width gridline (more visible than the previous near-invisible 0.04).
+    ctx.strokeStyle = b % 20 === 0 ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.08)";
+    ctx.lineWidth = 0.5;
+    ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(w, yy); ctx.stroke();
+    // Label badge so the number stays legible over the genre band fills.
+    const lbl = String(b);
+    const tw = ctx.measureText(lbl).width;
+    ctx.fillStyle = "rgba(14,20,32,0.7)";
+    ctx.fillRect(0, yy - 6, tw + 6, 12);
+    ctx.fillStyle = "rgba(230,236,245,0.95)";
+    ctx.fillText(lbl, 3, yy + 3);
   }
 
   const tickIntervals = [5, 10, 30, 60, 300, 600, 1800, 3600];
@@ -473,24 +484,73 @@ function redrawAll() {
   drawKey();
 }
 
+// Plot Camelot key as a dot scatter on a 12-lane grid (hour 1-12 on the y-axis).
+// 12A and 12B share the same y-coordinate; the dot colour distinguishes the ring
+// (A=minor → cyan, B=major → yellow). Windows below KEY_CONF_THRESHOLD are
+// suppressed to keep low-confidence flicker from confusing the eye.
+const KEY_CONF_THRESHOLD = 0.45;
+const KEY_COLOR_A = "rgba(77, 208, 225, 0.85)";   // minor — cyan
+const KEY_COLOR_B = "rgba(255, 202, 40, 0.85)";   // major — yellow
+
 function drawKey() {
   const { ctx, w, h } = rescale(keyCv);
   const vs = viewStart, ve = viewEnd;
   const span = ve - vs;
   if (span <= 0) return;
+
+  // Grid + axis labels (drawn even when DATA.keys is empty so the panel doesn't go blank).
+  const TOP_PAD = 8;
+  const BOT_PAD = 6;
+  const usableH = h - TOP_PAD - BOT_PAD;
+  const laneH = usableH / 12;
+  // 12 at top, 1 at bottom — bigger numbers higher matches "moving up" musically.
+  const yForHour = (hour) => TOP_PAD + (12 - hour + 0.5) * laneH;
+
+  ctx.font = "9px monospace";
+  ctx.textAlign = "left";
+  for (let hour = 1; hour <= 12; hour++) {
+    const yy = yForHour(hour);
+    ctx.strokeStyle = hour % 3 === 0 ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.06)";
+    ctx.lineWidth = 0.5;
+    ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(w, yy); ctx.stroke();
+    const lbl = String(hour);
+    const tw = ctx.measureText(lbl).width;
+    ctx.fillStyle = "rgba(14,20,32,0.7)";
+    ctx.fillRect(0, yy - 5, tw + 6, 10);
+    ctx.fillStyle = "rgba(230,236,245,0.85)";
+    ctx.fillText(lbl, 3, yy + 3);
+  }
+
   if (!DATA.keys || !DATA.keys.length) return;
 
-  const step = DATA.keys.length > 1 ? (DATA.keys[1][0] - DATA.keys[0][0]) : 10;
+  // Plot dots; size scales with confidence so strong reads stand out.
   for (const [t, camelot, , corr] of DATA.keys) {
-    if (t + step < vs || t > ve) continue;
-    const x1 = ((t - vs) / span) * w;
-    const x2 = ((t + step - vs) / span) * w;
-    const conf = Math.min(1, Math.max(0.2, corr * 1.5));
-    ctx.fillStyle = camelotColor(camelot, conf);
-    ctx.fillRect(x1, 0, Math.max(1, x2 - x1 + 1), h);
+    if (corr < KEY_CONF_THRESHOLD) continue;
+    if (t < vs || t > ve) continue;
+    const hour = parseInt(camelot, 10);
+    if (!hour) continue;
+    const ring = camelot.slice(-1);
+    const x = ((t - vs) / span) * w;
+    const y = yForHour(hour);
+    const radius = 1.4 + Math.min(1, (corr - KEY_CONF_THRESHOLD) / 0.4) * 2.2;
+    ctx.fillStyle = ring === "B" ? KEY_COLOR_B : KEY_COLOR_A;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
   }
+
+  // Highlight current playhead's hour with a faint horizontal accent + vertical line.
   const tCur = audio.currentTime || 0;
   if (tCur >= vs && tCur <= ve) {
+    const here = keyAt(tCur);
+    if (here && here.corr >= KEY_CONF_THRESHOLD) {
+      const hour = parseInt(here.camelot, 10);
+      if (hour) {
+        const yy = yForHour(hour);
+        ctx.fillStyle = "rgba(255, 202, 40, 0.10)";
+        ctx.fillRect(0, yy - laneH / 2, w, laneH);
+      }
+    }
     const phX = ((tCur - vs) / span) * w;
     ctx.fillStyle = "#ffca28";
     ctx.fillRect(phX - 1, 0, 2, h);

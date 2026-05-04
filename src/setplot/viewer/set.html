@@ -58,7 +58,7 @@
   #coverage-canvas { width: 100%; height: 28px; display: block; cursor: pointer; }
 
   /* Key strip */
-  #key-canvas { width: 100%; height: 28px; display: block; cursor: pointer; }
+  #key-canvas { width: 100%; height: 130px; display: block; cursor: pointer; }
 
   /* Camelot pill readout in transport */
   #key-now { font-family: "SF Mono", monospace; padding: 4px 10px; border-radius: 4px;
@@ -185,8 +185,8 @@
 
   <div class="panel">
     <div class="panel-title">
-      Camelot key (per 10s window, hue=hour 1-12, brightness=A/B ring)
-      <span class="hint">low-confidence cells are dimmed · hover for exact key</span>
+      Camelot key — hour 1–12 on the y-axis
+      <span class="hint">A=minor (cyan) · B=major (yellow) · low-confidence (&lt;0.45) hidden</span>
     </div>
     <div class="time-aligned">
       <canvas id="key-canvas"></canvas>
