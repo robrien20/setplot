@@ -17,6 +17,16 @@ import librosa
 import matplotlib.pyplot as plt
 import numpy as np
 
+try:
+    import essentia
+    import essentia.standard as es
+
+    HAS_ESSENTIA = True
+    essentia.log.warningActive = False
+    essentia.log.infoActive = False
+except ImportError:
+    HAS_ESSENTIA = False
+
 # librosa 0.10's audioread fallback path emits noisy FutureWarning + UserWarning
 # every chunk for inputs libsndfile can't read natively (mp4/m4a — what yt-dlp
 # delivers). The fallback works correctly, just chatters. Filter narrowly.
@@ -70,6 +80,48 @@ def sliding_tempo_for_chunk(
         bpm = _octave_fix(float(bpm_raw[0]))
         out.append((start / sr, bpm))
     return out
+
+
+def scan_essentia(
+    path: Path, step_s: float, window_s: float, chunk_min: float, sr: int = 44100
+) -> list[tuple[float, float]]:
+    """Walk the file in chunks, return (t, bpm) pairs via Essentia RhythmExtractor2013.
+
+    RhythmExtractor2013(method='multifeature') combines onset detection + comb
+    filter analysis — significantly more accurate on EDM than librosa's
+    autocorrelation tempo. The estimator is octave-aware internally, so the
+    ``_octave_fix`` heuristic the librosa path needs is irrelevant here.
+    """
+    if not HAS_ESSENTIA:
+        raise RuntimeError("essentia is not installed; install setplot[essentia] or use engine='librosa'")
+
+    from setplot.pipeline._decode import ensure_decoded_wav
+
+    # Essentia's RhythmExtractor expects 44.1 kHz mono. Cache once.
+    path = ensure_decoded_wav(path, sr=sr)
+    duration = librosa.get_duration(path=str(path))
+    chunk_s = chunk_min * 60
+    overlap = window_s
+    rhythm = es.RhythmExtractor2013(method="multifeature")
+    results: list[tuple[float, float]] = []
+    t = 0.0
+    while t < duration:
+        this_len = min(chunk_s + overlap, duration - t)
+        # librosa.load via libsndfile (fast on the cached WAV); essentia wants float32.
+        y, _ = librosa.load(str(path), sr=sr, mono=True, offset=t, duration=this_len)
+        y = y.astype("float32", copy=False)
+        window_samples = int(window_s * sr)
+        step_samples = int(step_s * sr)
+        for start in range(0, len(y) - window_samples + 1, step_samples):
+            clip = y[start : start + window_samples]
+            bpm_val, _ticks, _conf, _est, _intervals = rhythm(clip)
+            abs_t = t + start / sr
+            if results and abs_t <= results[-1][0] + step_s / 2:
+                continue
+            results.append((abs_t, float(bpm_val)))
+        print(f"  essentia chunk t={t / 60:6.1f}min  total {len(results)}")
+        t += chunk_s
+    return results
 
 
 def scan_file(
@@ -166,18 +218,31 @@ def run(
     chunk_min: float = 10.0,
     sr: int = 22050,
     start_bpm: float = 130.0,
+    engine: str = "essentia",
 ) -> Path:
-    """Run BPM analysis end-to-end. Returns path to the CSV."""
+    """Run BPM analysis end-to-end. Returns path to the CSV.
+
+    ``engine="essentia"`` uses RhythmExtractor2013 (multi-feature, octave-aware,
+    44.1 kHz). Falls back to librosa autocorrelation if essentia isn't installed.
+    """
     file = Path(file)
     if not file.exists():
         raise FileNotFoundError(file)
 
-    print(f"file: {file}  step={step}s  window={window}s  chunk={chunk_min}min  sr={sr}")
-    pairs = scan_file(file, step, window, chunk_min, sr, start_bpm)
+    if engine == "essentia" and not HAS_ESSENTIA:
+        print("essentia not installed — falling back to librosa")
+        engine = "librosa"
+
+    print(f"file: {file}  engine={engine}  step={step}s  window={window}s  chunk={chunk_min}min")
+    if engine == "essentia":
+        pairs = scan_essentia(file, step, window, chunk_min, sr=44100)
+    else:
+        pairs = scan_file(file, step, window, chunk_min, sr, start_bpm)
+
     csv_path = file.with_suffix(file.suffix + ".bpm.csv")
     png_path = file.with_suffix(file.suffix + ".bpm.png")
     write_csv(pairs, csv_path)
-    plot(pairs, png_path, f"BPM over time — {file.name}")
+    plot(pairs, png_path, f"BPM over time ({engine}) — {file.name}")
     print(f"wrote CSV: {csv_path}")
     print(f"{len(pairs)} estimates over {fmt_ts(pairs[-1][0] if pairs else 0)}")
     if pairs:

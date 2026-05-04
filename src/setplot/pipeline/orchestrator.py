@@ -40,15 +40,27 @@ def _run_peaks(set_id: str, root: Path | None) -> Path:
     return peaks_mod.make_peaks(set_id, root=root)
 
 
-def _run_bpm(set_id: str, root: Path | None, step: float, window: float, chunk_min: float) -> Path:
+def _run_bpm(
+    set_id: str,
+    root: Path | None,
+    step: float,
+    window: float,
+    chunk_min: float,
+    engine: str = "essentia",
+) -> Path:
     src = store.find_source(set_id, root=root)
     if src is None:
         raise FileNotFoundError(f"no source media in set {set_id}")
-    pairs = bpm_mod.scan_file(src, step, window, chunk_min, sr=22050, start_bpm=130.0)
+    if engine == "essentia" and not bpm_mod.HAS_ESSENTIA:
+        engine = "librosa"
+    if engine == "essentia":
+        pairs = bpm_mod.scan_essentia(src, step, window, chunk_min, sr=44100)
+    else:
+        pairs = bpm_mod.scan_file(src, step, window, chunk_min, sr=22050, start_bpm=130.0)
     out = store.step_output_path(set_id, "bpm", root=root)
     out.write_text(
         json.dumps(
-            {"step_s": step, "window_s": window, "data": [[t, b] for t, b in pairs]},
+            {"step_s": step, "window_s": window, "engine": engine, "data": [[t, b] for t, b in pairs]},
             ensure_ascii=False,
         )
     )
@@ -207,6 +219,7 @@ def analyze(
     root: Path | None = None,
     bpm_step: float = 5.0,
     bpm_window: float = 24.0,
+    bpm_engine: str = "essentia",
     key_step: float = 10.0,
     key_window: float = 24.0,
     key_engine: str = "essentia",
@@ -230,7 +243,7 @@ def analyze(
 
     runners: dict[str, Callable[[], Path]] = {
         "peaks": lambda: _run_peaks(set_id, root),
-        "bpm": lambda: _run_bpm(set_id, root, bpm_step, bpm_window, chunk_min),
+        "bpm": lambda: _run_bpm(set_id, root, bpm_step, bpm_window, chunk_min, bpm_engine),
         "key": lambda: _run_key(set_id, root, key_step, key_window, chunk_min, key_engine),
         "fingerprint": lambda: _run_fingerprint(set_id, root, fingerprint_stride, fingerprint_rec_length),
     }

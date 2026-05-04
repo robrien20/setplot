@@ -51,13 +51,18 @@ def bpm(
     step: float = typer.Option(5.0, help="Seconds between BPM estimates."),
     window: float = typer.Option(24.0, help="Window length per estimate (s)."),
     chunk_min: float = typer.Option(10.0, "--chunk-min", help="Read this many minutes per chunk."),
-    sr: int = typer.Option(22050, help="Resample rate."),
-    start_bpm: float = typer.Option(130.0, "--start-bpm", help="Prior BPM center."),
+    sr: int = typer.Option(22050, help="Resample rate (librosa engine only)."),
+    start_bpm: float = typer.Option(130.0, "--start-bpm", help="Prior BPM center (librosa engine only)."),
+    engine: str = typer.Option("essentia", help="essentia (RhythmExtractor2013, preferred) or librosa."),
 ) -> None:
     """Map BPM over time. Writes <file>.bpm.csv and .bpm.png next to the input."""
     from setplot.pipeline import bpm as bpm_mod
 
-    bpm_mod.run(file, step=step, window=window, chunk_min=chunk_min, sr=sr, start_bpm=start_bpm)
+    if engine not in {"essentia", "librosa"}:
+        raise typer.BadParameter("engine must be 'essentia' or 'librosa'")
+    bpm_mod.run(
+        file, step=step, window=window, chunk_min=chunk_min, sr=sr, start_bpm=start_bpm, engine=engine
+    )
 
 
 @app.command()
@@ -130,6 +135,7 @@ def import_(
         False, "--skip-peaks", help="Skip waveform peaks (e.g. audiowaveform not installed)."
     ),
     key_engine: str = typer.Option("essentia", help="Key engine: 'essentia' or 'librosa'."),
+    bpm_engine: str = typer.Option("essentia", help="BPM engine: 'essentia' or 'librosa'."),
 ) -> None:
     """Ingest <target> into the SetPlot data dir and run analysis."""
     from setplot.pipeline import ingest as ingest_mod
@@ -142,7 +148,7 @@ def import_(
     skip: tuple[str, ...] = tuple(
         s for s, on in (("fingerprint", skip_fingerprint), ("peaks", skip_peaks)) if on
     )
-    steps = orchestrator.analyze(sid, key_engine=key_engine, skip=skip)
+    steps = orchestrator.analyze(sid, key_engine=key_engine, bpm_engine=bpm_engine, skip=skip)
     for step, state in steps.items():
         typer.echo(f"  {step:12s} {state}")
 

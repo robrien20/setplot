@@ -39,7 +39,10 @@ def test_bpm_run_on_m4a_uses_decode_cache(tmp_path):
         capture_output=True,
     )
 
-    csv_path = bpm.run(m4a, step=2.0, window=8.0, chunk_min=1.0)
+    # Pin to librosa so we exercise the cache path that replaces the audioread
+    # fallback. (essentia's path uses a separate 44100 cache and was the whole
+    # reason librosa needed audioread in the first place.)
+    csv_path = bpm.run(m4a, step=2.0, window=8.0, chunk_min=1.0, engine="librosa")
 
     # The decode cache lives next to the source.
     cache = tmp_path / ".work-22050.wav"
