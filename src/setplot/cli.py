@@ -69,7 +69,7 @@ def bpm(
 def key(
     file: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
     step: float = typer.Option(10.0),
-    window: float = typer.Option(24.0),
+    window: float = typer.Option(48.0),
     chunk_min: float = typer.Option(10.0, "--chunk-min"),
     sr: int = typer.Option(22050),
     engine: str = typer.Option("essentia", help="essentia (preferred) or librosa."),

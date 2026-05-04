@@ -271,7 +271,7 @@ def run(
     file: Path,
     *,
     step: float = 10.0,
-    window: float = 24.0,
+    window: float = 48.0,
     chunk_min: float = 10.0,
     sr: int = 22050,
     engine: str = "essentia",

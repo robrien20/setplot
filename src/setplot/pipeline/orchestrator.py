@@ -221,7 +221,7 @@ def analyze(
     bpm_window: float = 36.0,
     bpm_engine: str = "essentia",
     key_step: float = 10.0,
-    key_window: float = 24.0,
+    key_window: float = 48.0,
     key_engine: str = "essentia",
     fingerprint_stride: float = 30.0,
     fingerprint_rec_length: int = 10,
