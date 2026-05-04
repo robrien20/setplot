@@ -76,7 +76,7 @@ async function refresh() {
     const sets = body.sets || [];
     grid.innerHTML = "";
     if (sets.length === 0) {
-      grid.innerHTML = `<div class="empty-state">No sets yet. Drop a YouTube URL or a local file path above, or run <code>setplot import &lt;url-or-path&gt;</code> from the CLI.</div>`;
+      grid.innerHTML = `<div class="empty-state">No sets yet. Drop a YouTube/SoundCloud URL or a local file path above, or run <code>setplot import &lt;url-or-path&gt;</code> from the CLI.</div>`;
     } else {
       for (const s of sets) grid.appendChild(renderCard(s));
     }
@@ -110,21 +110,20 @@ async function startImport(target) {
     const { job_id } = await r.json();
     logStatus(`job_id=${job_id} — streaming progress…`);
     const es = new EventSource(`/api/jobs/${encodeURIComponent(job_id)}/stream`);
-    let lastSetId = null;
     es.onmessage = (e) => {
       try {
         const ev = JSON.parse(e.data);
-        if (ev.set_id) lastSetId = ev.set_id;
         const tag = ev.step ? `[${ev.step}]`.padEnd(14) : "[?]          ";
         const state = ev.state || "?";
         const extra = ev.error ? `  ${ev.error}` : "";
         logStatus(`  ${tag} ${state}${extra}`);
-        if (ev.step === "all" && ev.state === "done") {
+        // The set_id is known the moment ingest finishes; the analysis steps
+        // that follow run on the server and the set page picks them up via
+        // its own polling. So we don't need to stay on the library page —
+        // navigate as soon as we have an id to show.
+        if (ev.set_id) {
           es.close();
-          refresh();
-          if (lastSetId) {
-            logStatus(`✓ done. Open: /set.html?id=${lastSetId}`);
-          }
+          window.location.assign(`/set.html?id=${encodeURIComponent(ev.set_id)}`);
         }
       } catch (err) {
         logStatus(`(parse error: ${err})`);

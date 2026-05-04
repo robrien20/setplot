@@ -1,19 +1,27 @@
-"""Drive a single set through ingest → peaks → bpm → key → fingerprint.
+"""Drive a single set through ingest → {peaks, bpm, key, fingerprint}.
+
+After ingest, the four analysis steps have no data dependency on each other —
+each reads ``source.*`` independently and writes its own artefact JSON — so we
+fan them out across a thread pool. Real-world wins come from overlapping the
+network-bound fingerprint scan and the subprocess-bound peaks step with the
+CPU-bound bpm/key passes; bpm and key still fight each other for CPU since
+Essentia/librosa already use BLAS threads internally.
 
 Each step writes its own JSON output into the set's data directory and updates
-``status.json`` so that the Phase 3 viewer can render skeleton state for
-in-flight steps and final state for completed ones.
+``status.json`` so that the viewer can render skeleton state for in-flight
+steps and final state for completed ones.
 
 Fan-out of failures: if a step raises, we mark it ``failed: <msg>`` in
-status.json and re-raise. Subsequent steps are NOT skipped — the orchestrator
-continues so that a transient failure in fingerprint (e.g. ACR creds missing)
-doesn't tank the BPM and key data the user does have.
+status.json. Other steps continue uninterrupted so that a transient failure in
+fingerprint (e.g. ACR creds missing) doesn't tank the BPM and key data.
 """
 
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
@@ -247,19 +255,38 @@ def analyze(
         "key": lambda: _run_key(set_id, root, key_step, key_window, chunk_min, key_engine),
         "fingerprint": lambda: _run_fingerprint(set_id, root, fingerprint_stride, fingerprint_rec_length),
     }
+
+    # status.json is the only shared mutable state — update_step is a
+    # read-modify-write of the file, so concurrent calls must serialise.
+    # bus.publish is documented thread-safe so event_cb needs no locking.
+    status_lock = threading.Lock()
+
+    def _run_one(step_name: str, runner: Callable[[], Path]) -> None:
+        with status_lock:
+            store.update_step(set_id, step_name, "running", root=root)
+        _emit(event_cb, {"step": step_name, "state": "running"})
+        try:
+            runner()
+            with status_lock:
+                store.update_step(set_id, step_name, "done", root=root)
+            _emit(event_cb, {"step": step_name, "state": "done"})
+        except Exception as exc:
+            with status_lock:
+                store.update_step(set_id, step_name, f"failed: {exc}", root=root)
+            _emit(event_cb, {"step": step_name, "state": "failed", "error": str(exc)})
+
+    # Mark skipped steps synchronously so their state is observable before
+    # any thread starts (matters for the viewer status pill on first paint).
+    to_run: list[tuple[str, Callable[[], Path]]] = []
     for step_name, runner in runners.items():
         if step_name in skip:
             store.update_step(set_id, step_name, "skipped", root=root)
             _emit(event_cb, {"step": step_name, "state": "skipped"})
-            continue
-        store.update_step(set_id, step_name, "running", root=root)
-        _emit(event_cb, {"step": step_name, "state": "running"})
-        try:
-            runner()
-            store.update_step(set_id, step_name, "done", root=root)
-            _emit(event_cb, {"step": step_name, "state": "done"})
-        except Exception as exc:
-            store.update_step(set_id, step_name, f"failed: {exc}", root=root)
-            _emit(event_cb, {"step": step_name, "state": "failed", "error": str(exc)})
+        else:
+            to_run.append((step_name, runner))
+
+    if to_run:
+        with ThreadPoolExecutor(max_workers=len(to_run), thread_name_prefix="setplot-step") as ex:
+            wait([ex.submit(_run_one, n, r) for n, r in to_run])
 
     return store.read_status(set_id, root=root)["steps"]

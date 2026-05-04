@@ -1016,6 +1016,14 @@ async function reloadStep(step) {
       DATA.stride = doc.stride_s || DATA.stride;
       drawBPM._segments = null;
       renderTracklist();
+    } else if (step === "peaks") {
+      // Wavesurfer was booted without peaks (browser decoded the audio itself).
+      // Tear it down and rebuild with the real peaks payload now that it exists.
+      const r = await fetch(`/api/sets/${encodeURIComponent(SET_ID)}/peaks.json`, { cache: "no-store" });
+      if (!r.ok) return false;
+      const peaksDoc = await r.json();
+      if (wavesurfer) { try { wavesurfer.destroy(); } catch (_) {} wavesurfer = null; }
+      await initWavesurfer(DATA.duration_s, peaksDoc);
     }
     redrawAll();
     return true;
