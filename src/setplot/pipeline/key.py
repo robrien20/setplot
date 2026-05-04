@@ -27,9 +27,14 @@ warnings.filterwarnings("ignore", category=FutureWarning, module=r"librosa\..*")
 warnings.filterwarnings("ignore", category=UserWarning, module=r"librosa\..*")
 
 try:
+    import essentia
     import essentia.standard as es
 
     HAS_ESSENTIA = True
+    # Essentia logs "No network created…" per per-window MonoLoader teardown.
+    # Internal cleanup chatter, not actionable; quiet it.
+    essentia.log.warningActive = False
+    essentia.log.infoActive = False
 except ImportError:
     HAS_ESSENTIA = False
 
