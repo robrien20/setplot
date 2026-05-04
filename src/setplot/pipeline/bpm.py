@@ -82,6 +82,52 @@ def sliding_tempo_for_chunk(
     return out
 
 
+def fold_octave_outliers(
+    pairs: list[tuple[float, float]], window_pts: int = 21, tol: float = 0.06
+) -> tuple[list[tuple[float, float]], int]:
+    """Fold isolated half/double-tempo outliers using a wide local median.
+
+    Essentia's RhythmExtractor2013 is octave-aware *within* a window, but on
+    sparse-drum stretches (breakdowns, ambient bridges) it can still lock
+    onto the half-tempo. The result is a 140 → 70 → 140 spike that's not
+    musically real.
+
+    For each value, build a sorted-median over its ``window_pts`` neighbours
+    (excluding self). If the value is within ``tol`` of exactly 0.5× or 2×
+    that median, fold it. Wide window (default 21 points = ~100s at step=5s)
+    means a multi-bar breakdown can't drag the median along with it.
+
+    Returns ``(folded_pairs, n_folded)``.
+    """
+    if len(pairs) < 5:
+        return pairs, 0
+    bpms = [b for _, b in pairs]
+    half_w = window_pts // 2
+    out: list[tuple[float, float]] = []
+    n_folded = 0
+    for i, (t, bpm) in enumerate(pairs):
+        lo = max(0, i - half_w)
+        hi = min(len(bpms), i + half_w + 1)
+        neighbours = bpms[lo:i] + bpms[i + 1 : hi]
+        if len(neighbours) < 5:
+            out.append((t, bpm))
+            continue
+        median = sorted(neighbours)[len(neighbours) // 2]
+        if median <= 0:
+            out.append((t, bpm))
+            continue
+        ratio = bpm / median
+        if abs(ratio - 0.5) < tol:
+            out.append((t, bpm * 2))
+            n_folded += 1
+        elif abs(ratio - 2.0) < tol:
+            out.append((t, bpm / 2))
+            n_folded += 1
+        else:
+            out.append((t, bpm))
+    return out, n_folded
+
+
 def scan_essentia(
     path: Path, step_s: float, window_s: float, chunk_min: float, sr: int = 44100
 ) -> list[tuple[float, float]]:
@@ -121,7 +167,10 @@ def scan_essentia(
             results.append((abs_t, float(bpm_val)))
         print(f"  essentia chunk t={t / 60:6.1f}min  total {len(results)}")
         t += chunk_s
-    return results
+    folded, n_folded = fold_octave_outliers(results)
+    if n_folded:
+        print(f"  octave-folded {n_folded}/{len(results)} half/double-tempo outliers")
+    return folded
 
 
 def scan_file(

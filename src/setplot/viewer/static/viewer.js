@@ -248,12 +248,41 @@ function drawMinimap() {
   ctx.beginPath(); ctx.moveTo(phX, 0); ctx.lineTo(phX, h); ctx.stroke();
 }
 
+// Visible-range autoscale, snapped to "nice" round numbers. Uses p2/p98
+// percentiles instead of strict min/max so a stray octave-error spike
+// (140 → 70 → 140) can't drag the axis low and squash the real data.
+function bpmYRange(vs, ve) {
+  const vals = [];
+  for (const [t, b] of DATA.bpm) {
+    if (t < vs - 5 || t > ve + 5) continue;
+    if (b > 30 && b < 240) vals.push(b);
+  }
+  if (vals.length < 5) return [60, 220];
+  vals.sort((a, b) => a - b);
+  const lo = vals[Math.floor(vals.length * 0.02)];
+  const hi = vals[Math.min(vals.length - 1, Math.floor(vals.length * 0.98))];
+  const pad = Math.max((hi - lo) * 0.15, 5);
+  let yMin = Math.floor((lo - pad) / 5) * 5;
+  let yMax = Math.ceil((hi + pad) / 5) * 5;
+  if (yMax - yMin < 15) yMax = yMin + 15;
+  return [Math.max(40, yMin), Math.min(240, yMax)];
+}
+
+// Gridline interval scales with span so we get ~5–10 lines regardless of zoom.
+function bpmGridlines(yMin, yMax) {
+  const span = yMax - yMin;
+  const step = span <= 25 ? 2 : span <= 60 ? 5 : span <= 120 ? 10 : 20;
+  const lines = [];
+  for (let b = Math.ceil(yMin / step) * step; b <= yMax; b += step) lines.push(b);
+  return lines;
+}
+
 function drawBPM() {
   const { ctx, w, h } = rescale(bpmCv);
   const vs = viewStart, ve = viewEnd;
   const span = ve - vs;
   if (span <= 0) return;
-  const yMin = 60, yMax = 220;
+  const [yMin, yMax] = bpmYRange(vs, ve);
   const px = t => ((t - vs) / span) * w;
   const py = b => h - ((Math.min(yMax, Math.max(yMin, b)) - yMin) / (yMax - yMin)) * h;
 
@@ -316,32 +345,37 @@ function drawBPM() {
   }
   ctx.stroke();
 
+  // Genre labels — only show bands that overlap the visible y-range, so a
+  // narrow zoom around 130 BPM doesn't spill labels for hardcore/d&b off-axis.
   ctx.fillStyle = "#8798b6";
   ctx.font = "9px -apple-system, sans-serif";
   ctx.textAlign = "left";
   for (const [lo, hi, , label] of GENRE_BANDS) {
-    ctx.fillText(label, w + 4, (py(lo) + py(hi)) / 2 + 3);
+    if (hi <= yMin || lo >= yMax) continue;
+    const visLo = Math.max(lo, yMin), visHi = Math.min(hi, yMax);
+    if ((visHi - visLo) / (hi - lo) < 0.25) continue;  // mostly off-screen
+    ctx.fillText(label, w + 4, (py(visLo) + py(visHi)) / 2 + 3);
   }
 
-  // BPM grid labels — drawn INSIDE the canvas at the left edge (the .time-aligned
-  // padding is just gutter, anything drawn at canvas x<0 gets clipped). Pinned
-  // labels with a small dark badge so they read clearly over genre bands.
+  // BPM grid + labels — interval scales with the visible span. Major lines
+  // (every 4th gridline-step or multiples of 20) are slightly brighter.
   ctx.font = "10px monospace";
   ctx.textAlign = "left";
-  for (const b of [90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190]) {
+  const gridSteps = bpmGridlines(yMin, yMax);
+  const majorEvery = gridSteps.length > 8 ? 4 : 2;
+  gridSteps.forEach((b, i) => {
     const yy = py(b);
-    // Full-width gridline (more visible than the previous near-invisible 0.04).
-    ctx.strokeStyle = b % 20 === 0 ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.08)";
+    const isMajor = (i % majorEvery === 0) || (b % 20 === 0);
+    ctx.strokeStyle = isMajor ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.08)";
     ctx.lineWidth = 0.5;
     ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(w, yy); ctx.stroke();
-    // Label badge so the number stays legible over the genre band fills.
     const lbl = String(b);
     const tw = ctx.measureText(lbl).width;
     ctx.fillStyle = "rgba(14,20,32,0.7)";
     ctx.fillRect(0, yy - 6, tw + 6, 12);
     ctx.fillStyle = "rgba(230,236,245,0.95)";
     ctx.fillText(lbl, 3, yy + 3);
-  }
+  });
 
   const tickIntervals = [5, 10, 30, 60, 300, 600, 1800, 3600];
   const tickPx = 80;
