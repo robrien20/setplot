@@ -121,6 +121,14 @@ def scan_essentia(path: Path, step_s: float, window_s: float, duration: float) -
     """Yield (t_abs, pc, mode, strength, strength) for each window."""
     if not HAS_ESSENTIA:
         raise RuntimeError("essentia is not installed; install setplot[essentia] or use engine='librosa'")
+
+    from setplot.pipeline._decode import ensure_decoded_wav
+
+    # Essentia's KeyExtractor expects 44.1 kHz; pre-decode + cache once so each
+    # per-window ffmpeg slice becomes a fast wav-to-wav copy instead of a fresh
+    # mp4 decode pass.
+    path = ensure_decoded_wav(path, sr=44100)
+
     rows: list = []
     # Essentia: create one KeyExtractor and reuse. profileType='edma' is tuned for EDM.
     key_ext = es.KeyExtractor(profileType="edma")
