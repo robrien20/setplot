@@ -76,6 +76,11 @@ def scan_file(
     path: Path, step_s: float, window_s: float, chunk_min: float, sr: int, start_bpm: float
 ) -> list[tuple[float, float]]:
     """Stream the file in chunk_min-minute chunks, collect BPM estimates per step."""
+    from setplot.pipeline._decode import ensure_decoded_wav
+
+    # Pre-decode mp4/m4a once (no-op for mp3/wav/flac); chunked librosa.load
+    # then reads through libsndfile directly instead of the slow audioread path.
+    path = ensure_decoded_wav(path, sr)
     duration = librosa.get_duration(path=str(path))
     chunk_s = chunk_min * 60
     # Overlap each chunk by window_s so a window that straddles a chunk boundary still fits.

@@ -173,6 +173,11 @@ def estimate_key_librosa(chroma_mean: np.ndarray) -> tuple[int, str, float, floa
 def scan_librosa(path: Path, step_s: float, window_s: float, chunk_min: float, sr: int) -> list:
     import librosa
 
+    from setplot.pipeline._decode import ensure_decoded_wav
+
+    # Pre-decode mp4/m4a once (no-op for mp3/wav/flac); chunked librosa.load
+    # then reads through libsndfile directly instead of the slow audioread path.
+    path = ensure_decoded_wav(path, sr)
     duration = librosa.get_duration(path=str(path))
     chunk_s = chunk_min * 60
     overlap = window_s
