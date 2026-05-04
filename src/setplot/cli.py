@@ -49,7 +49,7 @@ def _main(
 def bpm(
     file: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
     step: float = typer.Option(5.0, help="Seconds between BPM estimates."),
-    window: float = typer.Option(24.0, help="Window length per estimate (s)."),
+    window: float = typer.Option(36.0, help="Window length per estimate (s). Wider = lower noise within real tracks."),
     chunk_min: float = typer.Option(10.0, "--chunk-min", help="Read this many minutes per chunk."),
     sr: int = typer.Option(22050, help="Resample rate (librosa engine only)."),
     start_bpm: float = typer.Option(130.0, "--start-bpm", help="Prior BPM center (librosa engine only)."),

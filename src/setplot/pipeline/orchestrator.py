@@ -218,7 +218,7 @@ def analyze(
     *,
     root: Path | None = None,
     bpm_step: float = 5.0,
-    bpm_window: float = 24.0,
+    bpm_window: float = 36.0,
     bpm_engine: str = "essentia",
     key_step: float = 10.0,
     key_window: float = 24.0,

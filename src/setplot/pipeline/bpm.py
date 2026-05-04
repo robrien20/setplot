@@ -214,7 +214,7 @@ def run(
     file: Path,
     *,
     step: float = 5.0,
-    window: float = 24.0,
+    window: float = 36.0,
     chunk_min: float = 10.0,
     sr: int = 22050,
     start_bpm: float = 130.0,
