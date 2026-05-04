@@ -126,7 +126,7 @@ def plot(
 
 @app.command(name="import")
 def import_(
-    target: str = typer.Argument(..., help="YouTube/yt-dlp URL or path to a local media file."),
+    target: str = typer.Argument(..., help="URL (YouTube, SoundCloud, etc. — any yt-dlp source) or path to a local media file."),
     no_analyze: bool = typer.Option(False, "--no-analyze", help="Just ingest; don't run analysis steps."),
     skip_fingerprint: bool = typer.Option(
         False, "--skip-fingerprint", help="Skip ACR fingerprinting (e.g. when creds aren't set)."
