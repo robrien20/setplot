@@ -842,21 +842,25 @@ function audiowaveformPeaksToWavesurfer(payload) {
 }
 
 async function initWavesurfer(durationS, peaksPayload) {
+  // Filled mode (no barWidth/barGap) renders a continuous shape from the peak
+  // data — looks crisper than the discrete-bar mode at our typical
+  // peaks-per-pixel ratio. normalize=true uses the full vertical range
+  // regardless of the loudest sample's absolute amplitude. Higher device
+  // pixel ratios (retina) automatically benefit since wavesurfer reads
+  // window.devicePixelRatio.
   const opts = {
     container: "#waveform",
     media: audio,
-    waveColor: "#4dd0e1",
-    progressColor: "#ffca28",
+    waveColor: "rgba(77, 208, 225, 0.85)",
+    progressColor: "rgba(255, 202, 40, 0.95)",
     cursorColor: "#ffca28",
     cursorWidth: 2,
-    barWidth: 2,
-    barGap: 1,
-    height: 60,
+    height: 96,
     interact: true,
     dragToSeek: true,
     autoCenter: false,
     fillParent: true,
-    normalize: false,
+    normalize: true,
   };
   if (peaksPayload) {
     opts.peaks = audiowaveformPeaksToWavesurfer(peaksPayload);

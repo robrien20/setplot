@@ -1,9 +1,10 @@
 """Pre-compute waveform peaks via bbc/audiowaveform for the streaming viewer.
 
-We pass ``-z 256 -b 8``: 256 input samples per peak, 8 bits per peak. That's the
-sweet spot for long DJ sets — small enough that even a 7-hour set's peaks.json
-ships in well under 5 MB, dense enough that wavesurfer.js renders sharp peaks
-when zoomed in.
+Defaults: ``-z 128 -b 16`` — 128 input samples per peak (~172 peaks/sec at
+22050 Hz, 2× the BBC default density), 16 bits per peak (256× the dynamic
+range of the 8-bit packing). Net file size for an 88-min DJ set is ~10 MB,
+which the streaming viewer can pull in one fetch and feed to wavesurfer.js
+for a smooth filled-waveform render.
 
 If the source isn't natively readable by audiowaveform (mp4 video / m4a AAC),
 we lean on the ``_decode`` helper to materialise a cached WAV next to the
@@ -36,8 +37,8 @@ def make_peaks(
     set_id: str,
     *,
     root: Path | None = None,
-    samples_per_pixel: int = 256,
-    bits: int = 8,
+    samples_per_pixel: int = 128,
+    bits: int = 16,
     sample_rate: int = 22050,
 ) -> Path:
     """Run audiowaveform on the set's source media; return the peaks.json path."""
