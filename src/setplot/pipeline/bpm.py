@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import csv
 import warnings
+from collections import Counter
 from pathlib import Path
+from statistics import median
 
 import librosa
 import matplotlib.pyplot as plt
@@ -80,6 +82,71 @@ def sliding_tempo_for_chunk(
         bpm = _octave_fix(float(bpm_raw[0]))
         out.append((start / sr, bpm))
     return out
+
+
+def global_tempo_anchor(pairs: list[tuple[float, float]], bin_width: float = 2.0) -> float:
+    """Estimate the dominant tempo of a set, robust to large half/double-tempo clusters.
+
+    Histograms the BPMs into ``bin_width``-wide bins, picks the heaviest bin, then
+    returns the median of values within ±3 BPM of that bin center. Bin → mode picks
+    the right cluster; refining with a local median gives a precise anchor instead
+    of one quantized to the bin edge.
+
+    Returns 0.0 for inputs with too few usable points to anchor reliably.
+    """
+    bpms = [b for _, b in pairs if b > 30]
+    if len(bpms) < 10:
+        return 0.0
+    bins = Counter(round(b / bin_width) * bin_width for b in bpms)
+    dominant = max(bins, key=bins.get)
+    nearby = [b for b in bpms if abs(b - dominant) <= 3.0]
+    return float(median(nearby)) if nearby else float(dominant)
+
+
+def fold_against_anchor(
+    pairs: list[tuple[float, float]], anchor: float, tol: float = 0.08
+) -> tuple[list[tuple[float, float]], int]:
+    """Fold any point whose ratio to ``anchor`` is within ``tol`` of 0.5× or 2.0×.
+
+    Unlike ``fold_octave_outliers`` (local-median based), this catches sustained
+    octave-error clusters that are longer than the local window — e.g. a 100-second
+    half-tempo lock-on during a sparse-drum breakdown. Tight ``tol`` (default 0.08)
+    keeps legitimate slow intros / fast outros at non-octave ratios safe.
+    """
+    if anchor <= 0:
+        return list(pairs), 0
+    out: list[tuple[float, float]] = []
+    n_folded = 0
+    for t, bpm in pairs:
+        if bpm <= 0:
+            out.append((t, bpm))
+            continue
+        ratio = bpm / anchor
+        if abs(ratio - 0.5) < tol:
+            out.append((t, bpm * 2))
+            n_folded += 1
+        elif abs(ratio - 2.0) < tol:
+            out.append((t, bpm / 2))
+            n_folded += 1
+        else:
+            out.append((t, bpm))
+    return out, n_folded
+
+
+def fold_with_anchor_then_local(
+    pairs: list[tuple[float, float]],
+) -> tuple[list[tuple[float, float]], int]:
+    """Two-pass octave fold: global-anchor first, then local-median.
+
+    The global pass catches sustained half/double-tempo lock-ons that exceed the
+    local-median window. The local pass cleans up isolated single-point spikes
+    that the global pass leaves alone (because they're not near 0.5×/2× of the
+    set's dominant tempo, but are anomalous relative to their neighbors).
+    """
+    anchor = global_tempo_anchor(pairs)
+    after_global, n_global = fold_against_anchor(pairs, anchor) if anchor > 0 else (list(pairs), 0)
+    after_local, n_local = fold_octave_outliers(after_global)
+    return after_local, n_global + n_local
 
 
 def fold_octave_outliers(
@@ -167,9 +234,14 @@ def scan_essentia(
             results.append((abs_t, float(bpm_val)))
         print(f"  essentia chunk t={t / 60:6.1f}min  total {len(results)}")
         t += chunk_s
-    folded, n_folded = fold_octave_outliers(results)
-    if n_folded:
-        print(f"  octave-folded {n_folded}/{len(results)} half/double-tempo outliers")
+    anchor = global_tempo_anchor(results)
+    after_global, n_global = fold_against_anchor(results, anchor) if anchor > 0 else (results, 0)
+    folded, n_local = fold_octave_outliers(after_global)
+    if n_global or n_local:
+        print(
+            f"  octave-folded {n_global + n_local}/{len(results)} "
+            f"(anchor={anchor:.1f}: {n_global} global + {n_local} local)"
+        )
     return folded
 
 

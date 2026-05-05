@@ -156,6 +156,22 @@ Goal: `uv tool install setplot && setplot serve` works fresh on any Mac/Linux de
 export ACR_HOST=identify-eu-west-1.acrcloud.com
 export ACR_ACCESS_KEY=...
 export ACR_ACCESS_SECRET=...
+
+# Optional — streaming integrations (per-service; both can stay unset).
+# Apple Music links and 30s previews work without any of these.
+#
+# Spotify export (PKCE; no client secret needed):
+#   1. Register an app at https://developer.spotify.com/dashboard
+#   2. Add `http://127.0.0.1:8765/auth/spotify/callback` as a redirect URI
+#   3. Set the env var below; click "Export → Spotify" inside SetPlot to log in
+export SPOTIFY_CLIENT_ID=...
+#
+# Apple Music export (requires a paid Apple Developer membership):
+#   1. Generate an AuthKey .p8 file with MusicKit access
+#   2. Set all three:
+export APPLE_MUSIC_TEAM_ID=...
+export APPLE_MUSIC_KEY_ID=...
+export APPLE_MUSIC_KEY_PATH=/path/to/AuthKey_XXXXXXXXXX.p8
 python3 identify_tracks.py mymix.m4a --stride 30 --rec-length 10
 
 # BPM map

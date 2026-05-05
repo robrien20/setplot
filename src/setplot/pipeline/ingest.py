@@ -7,9 +7,10 @@ Both paths emit the same artefacts under ``data/{set_id}/``:
 - ``metadata.json``       -- title / source_url / uploader / duration_s / ingested_at / set_id
 - ``status.json``         -- initialised with all steps "pending"; ``ingest`` is set to "done"
 
-For URL ingest we use yt-dlp's Python API directly (not subprocess) with format
-``bv*[h<=720][ext=mp4]+ba[ext=m4a]/b[h<=720]`` — sane size for analysis,
-720p video + AAC audio in an MP4 container, falls back to best mp4 ≤720p.
+For URL ingest we use yt-dlp's Python API directly (not subprocess). Format
+selector prefers 720p video + AAC audio in an MP4 container (YouTube), falling
+back to best ≤720p single stream, then to audio-only sources (SoundCloud,
+Bandcamp, etc.) where no video track exists.
 """
 
 from __future__ import annotations
@@ -21,8 +22,10 @@ from typing import Any
 
 from setplot import store
 
-# 720p video + m4a audio merged to mp4; fallback to any single ≤720p stream.
-URL_FORMAT = "bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720]"
+# 720p video + m4a audio merged to mp4; fall back to a single ≤720p stream;
+# fall back to best audio for audio-only sources (SoundCloud); finally, best
+# of anything yt-dlp can reach.
+URL_FORMAT = "bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720]/ba/b"
 
 
 # ---------------------------------------------------------------------------

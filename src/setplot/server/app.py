@@ -8,6 +8,8 @@ media. Single-origin deployment, so no CORS gymnastics.
 from __future__ import annotations
 
 import asyncio
+import struct
+import zlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 import setplot
 from setplot import __version__
 from setplot.server.events import bus
-from setplot.server.routers import ingest, library, media
+from setplot.server.routers import auth, export, ingest, library, media, preview
 
 VIEWER_DIR = Path(setplot.__file__).parent / "viewer"
 
@@ -33,6 +35,49 @@ _FAVICON_SVG = (
     b"<rect x='11' y='7' width='2' height='2' fill='#fff'/>"
     b"</svg>"
 )
+
+
+def _make_apple_touch_icon(size: int = 180) -> bytes:
+    """Render the favicon glyph as a PNG for iOS home-screen icons.
+
+    iOS Safari probes /apple-touch-icon{,-precomposed}.png and won't accept
+    SVG, so we synthesize a PNG at import time using stdlib only — no Pillow
+    dep, no binary asset on disk.
+    """
+    bg = b"\x0a\x2a\x5a"
+    fg = b"\xff\xff\xff"
+    scale = size / 16
+    # (x0, y0, x1, y1) bars in the 16x16 grid, scaled up.
+    bars = [
+        (int(3 * scale), int(6 * scale), int(5 * scale), int(10 * scale)),
+        (int(7 * scale), int(3 * scale), int(9 * scale), int(13 * scale)),
+        (int(11 * scale), int(7 * scale), int(13 * scale), int(9 * scale)),
+    ]
+    bg_row = bg * size
+    raw = bytearray()
+    for y in range(size):
+        raw.append(0)  # PNG filter byte: None
+        row = bytearray(bg_row)
+        for x0, y0, x1, y1 in bars:
+            if y0 <= y < y1:
+                row[x0 * 3 : x1 * 3] = fg * (x1 - x0)
+        raw.extend(row)
+
+    def _chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    sig = b"\x89PNG\r\n\x1a\n"
+    ihdr = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)  # 8-bit RGB, no interlace
+    idat = zlib.compress(bytes(raw), 9)
+    return sig + _chunk(b"IHDR", ihdr) + _chunk(b"IDAT", idat) + _chunk(b"IEND", b"")
+
+
+_APPLE_TOUCH_ICON_PNG = _make_apple_touch_icon()
 
 
 @asynccontextmanager
@@ -54,6 +99,10 @@ def create_app() -> FastAPI:
     app.include_router(library.router, prefix="/api")
     app.include_router(media.router, prefix="/api")
     app.include_router(ingest.router, prefix="/api")
+    app.include_router(preview.router, prefix="/api")
+    app.include_router(export.router, prefix="/api")
+    # auth router defines both /auth/* (browser-facing) and /api/auth/* routes itself.
+    app.include_router(auth.router)
 
     @app.get("/", include_in_schema=False)
     async def _root() -> RedirectResponse:
@@ -64,6 +113,15 @@ def create_app() -> FastAPI:
         return Response(
             content=_FAVICON_SVG,
             media_type="image/svg+xml",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    @app.get("/apple-touch-icon.png", include_in_schema=False)
+    @app.get("/apple-touch-icon-precomposed.png", include_in_schema=False)
+    async def _apple_touch_icon() -> Response:
+        return Response(
+            content=_APPLE_TOUCH_ICON_PNG,
+            media_type="image/png",
             headers={"Cache-Control": "public, max-age=86400"},
         )
 

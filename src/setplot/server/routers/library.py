@@ -12,8 +12,19 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from setplot import store
+from setplot.config import get_settings
 
 router = APIRouter(tags=["library"])
+
+
+def _services_capability() -> dict[str, dict[str, bool]]:
+    """Tell the viewer which streaming integrations have credentials configured.
+    The frontend hides export buttons whose service flag is False."""
+    s = get_settings()
+    return {
+        "spotify": {"enabled": s.spotify_enabled()},
+        "apple": {"enabled": s.apple_music_enabled()},
+    }
 
 
 def _summarise(meta: dict[str, Any], status: dict[str, Any]) -> dict[str, Any]:
@@ -49,4 +60,4 @@ async def get_set(set_id: str) -> dict[str, Any]:
         status = store.read_status(set_id)
     except FileNotFoundError:
         status = {"analysis_version": store.ANALYSIS_VERSION, "steps": dict.fromkeys(store.STEPS, "pending")}
-    return _summarise(meta, status)
+    return {**_summarise(meta, status), "services": _services_capability()}
