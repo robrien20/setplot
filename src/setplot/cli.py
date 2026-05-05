@@ -229,7 +229,7 @@ def serve(
     if not no_browser:
         threading.Thread(target=_open_browser_after_bind, daemon=True).start()
     typer.echo(f"SetPlot serving on {url} (Ctrl-C to stop)")
-    uvicorn.run(create_app(), host=host, port=port, log_level="info")
+    uvicorn.run(create_app(), host=host, port=port, log_level="warning")
 
 
 if __name__ == "__main__":

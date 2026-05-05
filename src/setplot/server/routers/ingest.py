@@ -31,6 +31,11 @@ class IngestRequest(BaseModel):
     key_engine: str = "essentia"
 
 
+class ReanalyzeRequest(BaseModel):
+    steps: list[str]
+    key_engine: str = "essentia"
+
+
 def _format_sse(event: dict[str, Any], event_type: str | None = None) -> bytes:
     """RFC: each SSE message is ``event: <type>\\ndata: <utf-8>\\n\\n``."""
     lines = []
@@ -62,6 +67,26 @@ def _run_pipeline_for_job(job_id: str, req: IngestRequest) -> None:
         bus.publish(job_id, {"step": "ingest", "state": "failed", "error": str(exc)})
     finally:
         bus.close_job(job_id)
+
+
+def _run_reanalyze_for_job(job_id: str, set_id: str, req: ReanalyzeRequest) -> None:
+    try:
+        def cb(ev: dict[str, Any]) -> None:
+            bus.publish(job_id, {**ev, "set_id": set_id})
+
+        orchestrator.reanalyze_steps(set_id, req.steps, key_engine=req.key_engine, event_cb=cb)
+        bus.publish(job_id, {"step": "all", "state": "done", "set_id": set_id})
+    except Exception as exc:
+        bus.publish(job_id, {"step": "?", "state": "failed", "error": str(exc)})
+    finally:
+        bus.close_job(job_id)
+
+
+@router.post("/sets/{set_id}/analyze")
+async def reanalyze(set_id: str, req: ReanalyzeRequest, background: BackgroundTasks) -> dict[str, str]:
+    job_id = bus.create_job()
+    background.add_task(_run_reanalyze_for_job, job_id, set_id, req)
+    return {"job_id": job_id}
 
 
 @router.post("/ingest")

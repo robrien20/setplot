@@ -143,6 +143,14 @@
   .legend { display: flex; gap: 12px; font-size: 10px; color: var(--fg-dim); margin-top: 3px; align-items: center; }
   .legend-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
     margin-right: 4px; vertical-align: middle; border: 1px solid rgba(255,255,255,0.1); }
+
+  .reanalyze-btn { background: none; border: 1px solid var(--border); color: var(--fg-dim);
+    border-radius: 3px; padding: 1px 6px; font-size: 11px; cursor: pointer; line-height: 1.4;
+    transition: color 0.15s, border-color 0.15s; }
+  .reanalyze-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .reanalyze-btn:disabled { opacity: 0.4; cursor: default; }
+  .reanalyze-btn.running { color: var(--accent-2); border-color: var(--accent-2);
+    animation: pulse 1.6s ease-in-out infinite; }
 </style>
 </head>
 <body>
@@ -167,6 +175,7 @@
     <div class="panel-title">
       BPM — zoomed view
       <span class="hint">scroll to zoom · drag to seek · double-click to reset zoom</span>
+      <button class="reanalyze-btn" id="reanalyze-bpm" data-step="bpm" title="reanalyze BPM">↺ reanalyze</button>
     </div>
     <div class="time-aligned">
       <canvas id="bpm-canvas"></canvas>
@@ -193,6 +202,7 @@
     <div class="panel-title">
       Camelot key — hour 1–12 on the y-axis
       <span class="hint">A=minor (cyan) · B=major (yellow) · low-confidence (&lt;0.45) hidden</span>
+      <button class="reanalyze-btn" id="reanalyze-key" data-step="key" title="reanalyze key">↺ reanalyze</button>
     </div>
     <div class="time-aligned">
       <canvas id="key-canvas"></canvas>
@@ -203,6 +213,7 @@
     <div class="panel-title">
       Audio waveform — same time axis as BPM
       <span class="hint">click to seek · scroll to playback (wavesurfer)</span>
+      <button class="reanalyze-btn" id="reanalyze-peaks" data-step="peaks" title="reanalyze waveform peaks">↺ reanalyze</button>
     </div>
     <div class="time-aligned">
       <div id="waveform"></div>
@@ -250,6 +261,7 @@
     <div id="tracklist-panel">
       <div id="tracklist-header">
         <div class="panel-title" style="margin:0;">Tracklist</div>
+        <button class="reanalyze-btn" id="reanalyze-fingerprint" data-step="fingerprint" title="reanalyze fingerprint">↺ reanalyze</button>
         <input id="search" placeholder="search artist / title / label…">
         <label style="font-size:11px; color:var(--fg-dim); display:flex; gap:4px; align-items:center;">
           <input type="checkbox" id="only-visible"> only in view

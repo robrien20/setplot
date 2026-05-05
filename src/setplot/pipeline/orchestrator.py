@@ -162,7 +162,13 @@ def _merged_to_viewer_shape(merged: list[dict[str, Any]]) -> list[dict[str, Any]
     return out
 
 
-def _run_fingerprint(set_id: str, root: Path | None, stride: float, rec_length: int) -> Path:
+def _run_fingerprint(
+    set_id: str,
+    root: Path | None,
+    stride: float,
+    rec_length: int,
+    event_cb: EventCb = None,
+) -> Path:
     src = store.find_source(set_id, root=root)
     if src is None:
         raise FileNotFoundError(f"no source media in set {set_id}")
@@ -177,12 +183,49 @@ def _run_fingerprint(set_id: str, root: Path | None, stride: float, rec_length: 
             "in your shell or a project .env to enable fingerprinting."
         )
 
-    from acrcloud.recognizer import ACRCloudRecognizer
-
-    recognizer = ACRCloudRecognizer({"host": host, "access_key": key, "access_secret": secret, "timeout": 15})
+    recognizer_config = {"host": host, "access_key": key, "access_secret": secret, "timeout": 15}
     duration = fp_mod.probe_duration(src)
+    total_windows = max(1, int(duration // stride) + 1)
+    out = store.step_output_path(set_id, "fingerprint", root=root)
+
+    partial_hits: list[fp_mod.Hit] = []
+    partial_windows: dict[str, list[dict[str, Any]]] = {}
+    completed_count = 0
+
+    def _write_partial() -> None:
+        merged = fp_mod.dedupe_and_merge(partial_hits)
+        out.write_text(
+            json.dumps(
+                {
+                    "stride_s": stride,
+                    "rec_length_s": rec_length,
+                    "merged": _merged_to_viewer_shape(merged),
+                    "windows": partial_windows,
+                    "partial": True,
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    def window_cb(t: float, window_hits: list[fp_mod.Hit]) -> None:
+        nonlocal completed_count
+        completed_count += 1
+        partial_hits.extend(window_hits)
+        if window_hits:
+            bucket = partial_windows.setdefault(str(int(t)), [])
+            for h in window_hits:
+                bucket.append(_hit_to_window_candidate(h))
+            bucket.sort(key=lambda c: -c["score"])
+        _write_partial()
+        _emit(event_cb, {
+            "step": "fingerprint",
+            "state": "running",
+            "progress": completed_count,
+            "total": total_windows,
+        })
+
     hits, _observed = fp_mod.scan_file(
-        recognizer,
+        recognizer_config,
         src,
         duration,
         stride,
@@ -191,19 +234,17 @@ def _run_fingerprint(set_id: str, root: Path | None, stride: float, rec_length: 
         float("inf"),
         audd_token=None,
         host_for_logs=host,
+        window_cb=window_cb,
     )
     merged = fp_mod.dedupe_and_merge(hits)
 
-    # Build per-window candidates dict keyed by window_start_s (as a string for JSON).
     windows: dict[str, list[dict[str, Any]]] = {}
     for h in hits:
         bucket = windows.setdefault(str(int(h.window_start_s)), [])
         bucket.append(_hit_to_window_candidate(h))
-    # Sort each window's candidates by descending score.
     for cands in windows.values():
         cands.sort(key=lambda c: -c["score"])
 
-    out = store.step_output_path(set_id, "fingerprint", root=root)
     out.write_text(
         json.dumps(
             {
@@ -253,7 +294,7 @@ def analyze(
         "peaks": lambda: _run_peaks(set_id, root),
         "bpm": lambda: _run_bpm(set_id, root, bpm_step, bpm_window, chunk_min, bpm_engine),
         "key": lambda: _run_key(set_id, root, key_step, key_window, chunk_min, key_engine),
-        "fingerprint": lambda: _run_fingerprint(set_id, root, fingerprint_stride, fingerprint_rec_length),
+        "fingerprint": lambda: _run_fingerprint(set_id, root, fingerprint_stride, fingerprint_rec_length, event_cb),
     }
 
     # status.json is the only shared mutable state — update_step is a
@@ -288,5 +329,48 @@ def analyze(
     if to_run:
         with ThreadPoolExecutor(max_workers=len(to_run), thread_name_prefix="setplot-step") as ex:
             wait([ex.submit(_run_one, n, r) for n, r in to_run])
+
+    return store.read_status(set_id, root=root)["steps"]
+
+
+def reanalyze_steps(
+    set_id: str,
+    steps: list[str],
+    *,
+    root: Path | None = None,
+    bpm_step: float = 5.0,
+    bpm_window: float = 36.0,
+    bpm_engine: str = "essentia",
+    key_step: float = 10.0,
+    key_window: float = 48.0,
+    key_engine: str = "essentia",
+    fingerprint_stride: float = 30.0,
+    fingerprint_rec_length: int = 10,
+    chunk_min: float = 10.0,
+    event_cb: EventCb = None,
+) -> dict[str, str]:
+    """Re-run only the listed steps, leaving all other step statuses untouched."""
+    if not store.set_dir(set_id, root=root).exists():
+        raise FileNotFoundError(f"set {set_id} not found")
+    for s in steps:
+        if s not in store.STEPS:
+            raise ValueError(f"unknown step: {s!r}")
+
+    runners: dict[str, Callable[[], Path]] = {
+        "peaks": lambda: _run_peaks(set_id, root),
+        "bpm": lambda: _run_bpm(set_id, root, bpm_step, bpm_window, chunk_min, bpm_engine),
+        "key": lambda: _run_key(set_id, root, key_step, key_window, chunk_min, key_engine),
+        "fingerprint": lambda: _run_fingerprint(set_id, root, fingerprint_stride, fingerprint_rec_length, event_cb),
+    }
+    for step_name in steps:
+        store.update_step(set_id, step_name, "running", root=root)
+        _emit(event_cb, {"step": step_name, "state": "running"})
+        try:
+            runners[step_name]()
+            store.update_step(set_id, step_name, "done", root=root)
+            _emit(event_cb, {"step": step_name, "state": "done"})
+        except Exception as exc:
+            store.update_step(set_id, step_name, f"failed: {exc}", root=root)
+            _emit(event_cb, {"step": step_name, "state": "failed", "error": str(exc)})
 
     return store.read_status(set_id, root=root)["steps"]
