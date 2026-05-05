@@ -42,3 +42,5 @@ dist/
 # Playwright + ad-hoc local smoke artefacts
 .playwright-mcp/
 phase*-*.png
+
+.claude/worktrees/
