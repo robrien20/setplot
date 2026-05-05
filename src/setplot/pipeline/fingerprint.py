@@ -12,11 +12,13 @@ import json
 import subprocess
 import sys
 import time
+from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import requests
-from acrcloud.recognizer import ACRCloudRecognizer
+
 
 # ---------- ACRCloud request/response reference ---------------------------------------------------
 # Request params we control:
@@ -45,6 +47,37 @@ from acrcloud.recognizer import ACRCloudRecognizer
 # 3003 Limit exceeded, 3014 Invalid signature.
 # (3015 "could not generate fingerprint" is per-window and recoverable; not in here.)
 _FATAL_ACR_STATUS_CODES = frozenset({3001, 3002, 3003, 3014})
+
+
+def _recognize_window_worker(
+    config: dict,
+    file_path: str,
+    t: int,
+    rec_length: int,
+    idx: int,
+    total_windows: int,
+) -> tuple[int, str | None]:
+    """Run in a worker process — bypasses the GIL held by the ACR C extension.
+
+    Returns (idx, raw_json_str) or (idx, None) after all retries exhausted.
+    """
+    from acrcloud.recognizer import ACRCloudRecognizer
+
+    rec = ACRCloudRecognizer(config)
+    backoff = 2.0
+    for _attempt in range(5):
+        try:
+            raw = rec.recognize_by_file(file_path, t, rec_length)
+            return idx, raw if isinstance(raw, str) else json.dumps(raw)
+        except Exception as e:
+            print(
+                f"  [{idx}/{total_windows}] t={t}s error: {e} (retry in {backoff:.1f}s)",
+                file=sys.stderr,
+            )
+            time.sleep(backoff)
+            backoff *= 2
+    print(f"  [{idx}/{total_windows}] t={t}s: giving up on window", file=sys.stderr)
+    return idx, None
 
 
 class FingerprintAuthError(RuntimeError):
@@ -302,7 +335,7 @@ def audd_recognize(token: str, file_path: Path, t_seconds: float, length_seconds
 
 
 def scan_file(
-    recognizer: ACRCloudRecognizer,
+    recognizer_config: dict,
     file_path: Path,
     duration_s: float,
     stride_s: float,
@@ -311,6 +344,7 @@ def scan_file(
     end_s: float,
     audd_token: str | None = None,
     host_for_logs: str = "?",
+    window_cb: Callable[[float, list[Hit]], None] | None = None,
 ) -> tuple[list[Hit], dict]:
     hits: list[Hit] = []
     observed_keys: dict[str, set] = {
@@ -319,121 +353,148 @@ def scan_file(
         "external_metadata_providers": set(),
         "audd_result": set(),
     }
-    t = start_s
     stop = min(end_s, duration_s)
     total_windows = max(1, int((stop - start_s) // stride_s) + 1)
-    idx = 0
 
+    windows: list[tuple[int, float]] = []
+    t = start_s
+    idx = 0
     while t < stop:
         idx += 1
-        backoff = 2.0
-        for _attempt in range(5):
-            try:
-                raw = recognizer.recognize_by_file(str(file_path), int(t), rec_length)
-                break
-            except Exception as e:
-                print(
-                    f"  [{idx}/{total_windows}] t={t:.0f}s error: {e} (retry in {backoff:.1f}s)",
-                    file=sys.stderr,
-                )
-                time.sleep(backoff)
-                backoff *= 2
-        else:
-            print(f"  [{idx}/{total_windows}] t={t:.0f}s: giving up on window", file=sys.stderr)
-            t += stride_s
-            continue
-
-        resp = json.loads(raw) if isinstance(raw, str) else raw
-        code = (resp.get("status") or {}).get("code")
-        meta = resp.get("metadata") or {}
-        observed_keys["metadata"].update(meta.keys())
-        music = list(meta.get("music") or [])
-        for row in music + list(meta.get("humming") or []):
-            observed_keys["music_row"].update(row.keys())
-            observed_keys["external_metadata_providers"].update((row.get("external_metadata") or {}).keys())
-        for row in meta.get("humming") or []:
-            row_copy = dict(row)
-            row_copy.setdefault("result_from", 2)
-            music.append(row_copy)
-        custom_files = meta.get("custom_files") or []
-        if custom_files:
-            print(
-                f"        custom-bucket hits: {len(custom_files)} "
-                f"titles={[c.get('title') for c in custom_files[:3]]}"
-            )
-
-        if code == 0 and music:
-            window_hits = [parse_music_row(row, t, rec_length) for row in music]
-            window_hits.sort(key=lambda h: -h.score)
-            hits.extend(window_hits)
-            header = (
-                f"  [{idx}/{total_windows}] t={fmt_ts(t)} "
-                f"({len(window_hits)} candidate{'s' if len(window_hits) != 1 else ''})"
-            )
-            print(header)
-            for wh in window_hits:
-                po_mm = wh.play_offset_ms // 60000
-                po_ss = (wh.play_offset_ms % 60000) // 1000
-                dur_mm = wh.duration_ms // 60000
-                dur_ss = (wh.duration_ms % 60000) // 1000
-                pos = f"track-pos {po_mm:02d}:{po_ss:02d}/{dur_mm:02d}:{dur_ss:02d}"
-                print(
-                    f"        score={wh.score:>3}  {pos}  {wh.artists} — {wh.title}"
-                    + (f"  [ISRC {wh.isrc}]" if wh.isrc else "")
-                )
-        elif code == 1001:
-            print(f"  [{idx}/{total_windows}] t={fmt_ts(t)} acr: no match")
-        elif code in _FATAL_ACR_STATUS_CODES:
-            # Auth / quota / project-config errors aren't going to recover by
-            # continuing to grind through the rest of the file — every window
-            # would burn another wasted call. Abort loudly.
-            msg = (resp.get("status") or {}).get("msg", "?")
-            raise FingerprintAuthError(
-                f"ACR returned status {code} {msg!r} on window {idx}/{total_windows}. "
-                f"Check ACR_HOST / ACR_ACCESS_KEY / ACR_ACCESS_SECRET — these creds "
-                f"don't work against {host_for_logs!r}."
-            )
-        else:
-            msg = (resp.get("status") or {}).get("msg", "?")
-            print(f"  [{idx}/{total_windows}] t={fmt_ts(t)} acr: status={code} {msg}", file=sys.stderr)
-
-        if audd_token:
-            audd_backoff = 2.0
-            aud_resp: dict = {}
-            for _attempt in range(3):
-                try:
-                    aud_resp = audd_recognize(audd_token, file_path, t, rec_length)
-                    break
-                except Exception as e:
-                    print(f"        audd error: {e} (retry in {audd_backoff:.1f}s)", file=sys.stderr)
-                    time.sleep(audd_backoff)
-                    audd_backoff *= 2
-            else:
-                aud_resp = {"status": "error", "error": {"error_message": "all retries failed"}}
-
-            observed_keys["audd_result"].update(
-                (aud_resp.get("result") or {}).keys() if isinstance(aud_resp.get("result"), dict) else []
-            )
-            if aud_resp.get("status") == "success" and aud_resp.get("result"):
-                wh = parse_audd_result(aud_resp["result"], t, rec_length)
-                hits.append(wh)
-                po_mm = wh.play_offset_ms // 60000
-                po_ss = (wh.play_offset_ms % 60000) // 1000
-                dur_mm = wh.duration_ms // 60000
-                dur_ss = (wh.duration_ms % 60000) // 1000
-                print(
-                    f"        [AUDD] track-pos {po_mm:02d}:{po_ss:02d}/{dur_mm:02d}:{dur_ss:02d}  "
-                    f"{wh.artists} — {wh.title}"
-                    + (f"  [ISRC {wh.isrc}]" if wh.isrc else "")
-                    + (f"  {wh.song_link}" if wh.song_link else "")
-                )
-            elif aud_resp.get("status") == "success":
-                print("        [AUDD] no match")
-            else:
-                err = (aud_resp.get("error") or {}).get("error_message", aud_resp.get("status"))
-                print(f"        [AUDD] error: {err}", file=sys.stderr)
-
+        windows.append((idx, t))
         t += stride_s
+
+    # ProcessPoolExecutor bypasses the GIL held by the ACR native C extension,
+    # giving true parallelism for fingerprint extraction + API calls.
+    with ProcessPoolExecutor(max_workers=20) as executor:
+        future_to_window = {
+            executor.submit(
+                _recognize_window_worker,
+                recognizer_config,
+                str(file_path),
+                int(t),
+                rec_length,
+                idx,
+                total_windows,
+            ): (idx, t)
+            for idx, t in windows
+        }
+
+        for future in as_completed(future_to_window):
+            idx, t = future_to_window[future]
+            try:
+                _, raw = future.result()
+            except Exception as e:
+                print(f"  [{idx}/{total_windows}] t={fmt_ts(t)} error: {e}", file=sys.stderr)
+                if window_cb is not None:
+                    window_cb(t, [])
+                continue
+
+            if raw is None:
+                if window_cb is not None:
+                    window_cb(t, [])
+                continue
+
+            resp = json.loads(raw) if isinstance(raw, str) else raw
+            code = (resp.get("status") or {}).get("code")
+            meta = resp.get("metadata") or {}
+            observed_keys["metadata"].update(meta.keys())
+            music = list(meta.get("music") or [])
+            for row in music + list(meta.get("humming") or []):
+                observed_keys["music_row"].update(row.keys())
+                observed_keys["external_metadata_providers"].update(
+                    (row.get("external_metadata") or {}).keys()
+                )
+            for row in meta.get("humming") or []:
+                row_copy = dict(row)
+                row_copy.setdefault("result_from", 2)
+                music.append(row_copy)
+            custom_files = meta.get("custom_files") or []
+            if custom_files:
+                print(
+                    f"        custom-bucket hits: {len(custom_files)} "
+                    f"titles={[c.get('title') for c in custom_files[:3]]}"
+                )
+
+            if code == 0 and music:
+                window_hits = [parse_music_row(row, t, rec_length) for row in music]
+                window_hits.sort(key=lambda h: -h.score)
+                hits.extend(window_hits)
+                this_window_hits: list[Hit] = list(window_hits)
+                header = (
+                    f"  [{idx}/{total_windows}] t={fmt_ts(t)} "
+                    f"({len(window_hits)} candidate{'s' if len(window_hits) != 1 else ''})"
+                )
+                print(header)
+                for wh in window_hits:
+                    po_mm = wh.play_offset_ms // 60000
+                    po_ss = (wh.play_offset_ms % 60000) // 1000
+                    dur_mm = wh.duration_ms // 60000
+                    dur_ss = (wh.duration_ms % 60000) // 1000
+                    pos = f"track-pos {po_mm:02d}:{po_ss:02d}/{dur_mm:02d}:{dur_ss:02d}"
+                    print(
+                        f"        score={wh.score:>3}  {pos}  {wh.artists} — {wh.title}"
+                        + (f"  [ISRC {wh.isrc}]" if wh.isrc else "")
+                    )
+            else:
+                this_window_hits = []
+                if code == 1001:
+                    print(f"  [{idx}/{total_windows}] t={fmt_ts(t)} acr: no match")
+                elif code in _FATAL_ACR_STATUS_CODES:
+                    msg = (resp.get("status") or {}).get("msg", "?")
+                    raise FingerprintAuthError(
+                        f"ACR returned status {code} {msg!r} on window {idx}/{total_windows}. "
+                        f"Check ACR_HOST / ACR_ACCESS_KEY / ACR_ACCESS_SECRET — these creds "
+                        f"don't work against {host_for_logs!r}."
+                    )
+                else:
+                    msg = (resp.get("status") or {}).get("msg", "?")
+                    print(
+                        f"  [{idx}/{total_windows}] t={fmt_ts(t)} acr: status={code} {msg}",
+                        file=sys.stderr,
+                    )
+
+            if audd_token:
+                audd_backoff = 2.0
+                aud_resp: dict = {}
+                for _attempt in range(3):
+                    try:
+                        aud_resp = audd_recognize(audd_token, file_path, t, rec_length)
+                        break
+                    except Exception as e:
+                        print(f"        audd error: {e} (retry in {audd_backoff:.1f}s)", file=sys.stderr)
+                        time.sleep(audd_backoff)
+                        audd_backoff *= 2
+                else:
+                    aud_resp = {"status": "error", "error": {"error_message": "all retries failed"}}
+
+                observed_keys["audd_result"].update(
+                    (aud_resp.get("result") or {}).keys()
+                    if isinstance(aud_resp.get("result"), dict)
+                    else []
+                )
+                if aud_resp.get("status") == "success" and aud_resp.get("result"):
+                    wh = parse_audd_result(aud_resp["result"], t, rec_length)
+                    hits.append(wh)
+                    this_window_hits.append(wh)
+                    po_mm = wh.play_offset_ms // 60000
+                    po_ss = (wh.play_offset_ms % 60000) // 1000
+                    dur_mm = wh.duration_ms // 60000
+                    dur_ss = (wh.duration_ms % 60000) // 1000
+                    print(
+                        f"        [AUDD] track-pos {po_mm:02d}:{po_ss:02d}/{dur_mm:02d}:{dur_ss:02d}  "
+                        f"{wh.artists} — {wh.title}"
+                        + (f"  [ISRC {wh.isrc}]" if wh.isrc else "")
+                        + (f"  {wh.song_link}" if wh.song_link else "")
+                    )
+                elif aud_resp.get("status") == "success":
+                    print("        [AUDD] no match")
+                else:
+                    err = (aud_resp.get("error") or {}).get("error_message", aud_resp.get("status"))
+                    print(f"        [AUDD] error: {err}", file=sys.stderr)
+
+            if window_cb is not None:
+                window_cb(t, this_window_hits)
 
     return hits, observed_keys
 
@@ -673,7 +734,7 @@ def run(
             "Get them at https://console.acrcloud.com -> your Audio/Video Recognition project."
         )
 
-    recognizer = ACRCloudRecognizer({"host": host, "access_key": key, "access_secret": secret, "timeout": 15})
+    recognizer_config = {"host": host, "access_key": key, "access_secret": secret, "timeout": 15}
 
     duration = probe_duration(file)
     print(f"File: {file}  duration={fmt_ts(duration)}")
@@ -686,7 +747,7 @@ def run(
         raise RuntimeError("--audd requires AUDD_TOKEN env var.")
 
     hits, observed = scan_file(
-        recognizer,
+        recognizer_config,
         file,
         duration,
         stride,

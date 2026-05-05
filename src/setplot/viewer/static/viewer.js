@@ -1303,6 +1303,8 @@ async function startPolling() {
       if (state === "done" && !seenDone.has(step)) {
         seenDone.add(step);
         await reloadStep(step);
+      } else if (state === "running" && step === "fingerprint") {
+        await reloadStep("fingerprint");
       }
     }
     const stillRunning = Object.values(meta.steps || {}).some(s => s === "running" || s === "pending");
@@ -1316,6 +1318,68 @@ async function startPolling() {
   _pollHandle = setInterval(tick, 2000);
   tick();
 }
+
+// ============================================================================
+// Reanalyze buttons
+// ============================================================================
+async function reanalyzeStep(step) {
+  const btn = document.getElementById(`reanalyze-${step}`);
+  if (!btn || btn.disabled) return;
+
+  btn.disabled = true;
+  btn.classList.add("running");
+  btn.textContent = "↺ running…";
+
+  let r;
+  try {
+    r = await fetch(`/api/sets/${encodeURIComponent(SET_ID)}/analyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ steps: [step] }),
+    });
+  } catch (err) {
+    btn.disabled = false;
+    btn.classList.remove("running");
+    btn.textContent = "↺ reanalyze";
+    return;
+  }
+  if (!r.ok) {
+    btn.disabled = false;
+    btn.classList.remove("running");
+    btn.textContent = "↺ reanalyze";
+    return;
+  }
+
+  const { job_id } = await r.json();
+  const es = new EventSource(`/api/jobs/${encodeURIComponent(job_id)}/stream`);
+
+  const finish = () => {
+    es.close();
+    btn.disabled = false;
+    btn.classList.remove("running");
+    btn.textContent = "↺ reanalyze";
+  };
+
+  es.onmessage = async (e) => {
+    try {
+      const ev = JSON.parse(e.data);
+      if (ev.step === step && ev.state === "done") {
+        await reloadStep(step);
+      }
+      if (ev.step === "all" && ev.state === "done") {
+        finish();
+      } else if (ev.state === "failed") {
+        finish();
+      }
+    } catch (_) {}
+  };
+  es.onerror = finish;
+  es.addEventListener("close", finish);
+}
+
+document.querySelectorAll(".reanalyze-btn").forEach(btn => {
+  btn.addEventListener("click", () => reanalyzeStep(btn.dataset.step));
+});
 
 boot().catch(err => {
   console.error(err);
